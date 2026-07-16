@@ -105,13 +105,22 @@ func upsertProject(tx *sql.Tx, entry Entry) error {
 	return nil
 }
 
-func (s *SQLiteStore) ListHandoffs(projectID string, limit int) ([]HandoffRecord, error) {
+func (s *SQLiteStore) ListHandoffs(projectID string, filter ListFilter) ([]HandoffRecord, error) {
 	query := `SELECT id, project_id, source_agent, target_agent, stage, task, payload_file, created_at
-	          FROM handoffs WHERE project_id = ? ORDER BY id DESC`
+	          FROM handoffs WHERE project_id = ?`
 	args := []any{projectID}
-	if limit > 0 {
+	if filter.Stage != "" {
+		query += ` AND stage = ?`
+		args = append(args, filter.Stage)
+	}
+	if filter.Agent != "" {
+		query += ` AND (source_agent = ? OR target_agent = ?)`
+		args = append(args, filter.Agent, filter.Agent)
+	}
+	query += ` ORDER BY id DESC`
+	if filter.Limit > 0 {
 		query += ` LIMIT ?`
-		args = append(args, limit)
+		args = append(args, filter.Limit)
 	}
 	rows, err := s.db.Query(query, args...)
 	if err != nil {

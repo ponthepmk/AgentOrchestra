@@ -43,10 +43,14 @@ Codex ช่วยรีวิว ฯลฯ) ในโปรเจกต์เ�
 | `ao_init(project_dir, project_id, agents[], stages[])` | สร้าง `.ao/` + `.agentconfig` ให้โปรเจกต์ (idempotent) |
 | `ao_status(project_dir)` | คืน stage ปัจจุบัน, agent ที่ถือไม้อยู่, task ล่าสุด |
 | `ao_handoff(project_dir, source_agent, target_agent, stage, task, artifacts[], extra{})` | validate แล้วบันทึกการส่งไม้ต่อ |
-| `ao_log(project_dir, limit)` | ประวัติการส่งไม้ต่อ ล่าสุดก่อน |
+| `ao_log(project_dir, limit, stage, agent)` | ประวัติการส่งไม้ต่อ ล่าสุดก่อน กรองได้ด้วย `stage` และ/หรือ `agent` |
 
 Agent ทุกตัวที่ต่อ MCP server นี้จะเห็น tool ทั้ง 4 นี้ในรายการ tool ของตัวเองทันที และเรียกเองได้ตาม
 system prompt/instruction ที่ผู้ใช้ตั้งไว้ (เช่น "ก่อนเริ่มงานให้เรียก `ao_status` ก่อนเสมอ")
+
+`ao watch` (Automated Artifact Sync, ดูข้อ 6) เป็น **CLI-only** ไม่ใช่ MCP tool เพราะเป็น
+long-running process ที่ไม่เข้ากับรูปแบบ request/response ของ MCP tool call — รอ MCP Resources/
+subscription (Phase 2 ที่เหลือ) ก่อนถึงจะออกแบบให้ agent สั่ง watch ผ่าน MCP ได้ตรงๆ
 
 ## 5. State Machine
 
@@ -57,7 +61,35 @@ validate ว่า stage ที่ระบุอยู่ในชุดที�
 
 ดู `internal/state/stage.go`
 
-## 6. ดูเพิ่มเติม
+## 6. Automated Artifact Sync (`ao watch`)
+
+```
+ao watch --from claude-code --to antigravity-ide --stage documenting --pattern "*.md" [dir]
+```
+
+เฝ้าดู `dir` แบบ recursive (ข้าม `.ao/`, `.git/`, `bin/`, `node_modules/`, `vendor/`, และโฟลเดอร์ที่
+ขึ้นต้นด้วย `.` อื่นๆ) ด้วย `fsnotify` เมื่อไฟล์ที่ตรง `--pattern` ใดไฟล์หนึ่งถูกสร้างหรือแก้ไข (มี
+debounce 800ms กันยิงซ้ำตอน editor save รัวๆ) จะเรียก `orchestrator.Handoff` ให้เองทันที โดย task
+เป็นข้อความบอกว่าไฟล์ไหนเปลี่ยน พร้อมแนบไฟล์นั้นเป็น artifact — ตรงกับฟีเจอร์ "ดักจับไฟล์สเปคโปรเจกต์
+แล้วทริกเกอร์ให้ agent สร้างไดอะแกรมใหม่เสมอ" ในสเปคตั้งต้น หยุดด้วย Ctrl+C (SIGINT) หรือ SIGTERM
+
+ดู `internal/watcher/watcher.go`
+
+## 7. Debug Logging
+
+ทุก operation ของ `internal/orchestrator` (`init`, `status`, `handoff`, `log`, `reindex`) เขียน log
+เป็น JSON lines ลง `.ao/logs/ao.log` ของโปรเจกต์นั้น (rotate อัตโนมัติเมื่อไฟล์เกิน 5MB) — เป็น
+best-effort เสมอ: ถ้าเขียน log ไม่ได้ (เช่น permission ผิด) จะไม่ทำให้ operation หลักล้มเหลว
+(`internal/logging.Open` fallback เป็น no-op logger)
+
+MCP server เพิ่มเติมอีกชั้น: ทุก tool call (`ao_init`/`ao_status`/`ao_handoff`/`ao_log`) เขียน trace
+(ชื่อ tool, ระยะเวลา, สำเร็จ/ล้มเหลว) ไปที่ stderr ผ่าน `log/slog` — MCP client ส่วนใหญ่ (Claude Code
+ฯลฯ) เก็บ stderr ของ MCP server ไว้ให้เองอยู่แล้ว จึงดู log ระดับ "agent เรียก tool อะไรตอนไหน" ได้จาก
+ที่นั่นโดยไม่ต้องเปิดไฟล์เพิ่ม
+
+ดู `internal/logging/logging.go`
+
+## 8. ดูเพิ่มเติม
 
 - [`DATA_PIPELINE.md`](./DATA_PIPELINE.md) — Standard Payload / JSON Schema เต็ม
 - [`DB_SCHEMA.md`](./DB_SCHEMA.md) — โครงสร้าง SQLite index

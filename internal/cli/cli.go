@@ -4,13 +4,18 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
+	"github.com/ponthepmk/AgentOrchestra/internal/logging"
 	"github.com/ponthepmk/AgentOrchestra/internal/orchestrator"
+	"github.com/ponthepmk/AgentOrchestra/internal/watcher"
 )
 
 // Run dispatches args (os.Args[1:] minus the "mcp" subcommand, which main
@@ -33,6 +38,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		err = runHandoff(rest, stdout)
 	case "log":
 		err = runLog(rest, stdout)
+	case "watch":
+		err = runWatch(rest, stdout)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -56,10 +63,12 @@ Usage:
   ao init    --id <project_id> [--agents a,b,c] [--stages s1,s2,s3] [dir]
   ao status  [dir]
   ao handoff --from <agent> --to <agent> --task "<what to do>" [--stage <stage>] [--artifact <path>]... [dir]
-  ao log     [--limit N] [--reindex] [dir]
+  ao log     [--limit N] [--stage <stage>] [--agent <agent>] [--reindex] [dir]
+  ao watch   --from <agent> --to <agent> [--pattern <glob>]... [--stage <stage>] [dir]
   ao mcp     — run as an MCP server over stdio (for agents, not humans)
 
-[dir] defaults to the current directory.
+[dir] defaults to the current directory. Every run appends debug details to
+.ao/logs/ao.log in the target project.
 `)
 }
 
@@ -165,6 +174,8 @@ func runHandoff(args []string, stdout io.Writer) error {
 func runLog(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("log", flag.ContinueOnError)
 	limit := fs.Int("limit", 0, "max number of handoffs to show (0 = all)")
+	stage := fs.String("stage", "", "only show handoffs at this stage")
+	agent := fs.String("agent", "", "only show handoffs where this agent is the source or the target")
 	reindex := fs.Bool("reindex", false, "rebuild the SQLite index from .ao/handoffs/ before listing")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -177,7 +188,7 @@ func runLog(args []string, stdout io.Writer) error {
 			return fmt.Errorf("reindex: %w", err)
 		}
 	}
-	records, err := o.Log(*limit)
+	records, err := o.Log(orchestrator.LogFilter{Stage: *stage, Agent: *agent, Limit: *limit})
 	if err != nil {
 		return err
 	}
@@ -190,6 +201,45 @@ func runLog(args []string, stdout io.Writer) error {
 			r.CreatedAt.Format("2006-01-02T15:04:05Z"), r.SourceAgent, r.TargetAgent, r.Stage, r.Task)
 	}
 	return nil
+}
+
+// runWatch implements Automated Artifact Sync: it blocks, watching dir for
+// changes to files matching --pattern, and automatically records a handoff
+// to --to whenever one changes — until interrupted (Ctrl+C / SIGTERM).
+func runWatch(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
+	from := fs.String("from", "", "agent to attribute automatic handoffs to (required)")
+	to := fs.String("to", "", "agent to hand off to when a watched file changes (required)")
+	stage := fs.String("stage", "", "stage to set on auto-handoffs; defaults to the current stage")
+	var patterns stringSlice
+	fs.Var(&patterns, "pattern", "glob pattern to watch, matched against file basenames (repeatable, default: *.md)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dir := dirArg(fs.Args())
+	if *from == "" || *to == "" {
+		return fmt.Errorf("--from and --to are required")
+	}
+
+	w, err := watcher.New(watcher.Config{
+		Dir:         dir,
+		SourceAgent: *from,
+		TargetAgent: *to,
+		Stage:       *stage,
+		Patterns:    patterns,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(stdout, "watching %s for changes to %v — auto-handoff %s -> %s (Ctrl+C to stop)\n", dir, w.Patterns(), *from, *to)
+
+	log, closeLog := logging.Open(dir)
+	defer closeLog()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return w.Run(ctx, log)
 }
 
 func dirArg(positional []string) string {

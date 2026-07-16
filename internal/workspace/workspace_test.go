@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -43,6 +44,20 @@ func TestInitCreatesStateAndConfig(t *testing.T) {
 	}
 	if st.HolderAgent != "claude-code" {
 		t.Fatalf("expected initial holder claude-code, got %q", st.HolderAgent)
+	}
+}
+
+func TestInitializedRequiresStateFileNotJustDir(t *testing.T) {
+	dir := t.TempDir()
+	w := Open(dir)
+
+	// Simulate incidental activity (e.g. the debug logger) creating .ao/
+	// without ever running Init — this must NOT count as initialized.
+	if err := os.MkdirAll(filepath.Join(dir, aoDir, "logs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if w.Initialized() {
+		t.Fatal("expected a bare .ao/ dir without state.json to not count as initialized")
 	}
 }
 

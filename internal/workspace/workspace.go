@@ -56,9 +56,12 @@ func (w *Workspace) aoPath(parts ...string) string {
 	return filepath.Join(append([]string{w.Dir, aoDir}, parts...)...)
 }
 
-// Initialized reports whether .ao/ has already been set up in this workspace.
+// Initialized reports whether Init has already been run in this workspace.
+// It checks for state.json specifically (not just the .ao/ directory)
+// because other incidental activity — e.g. the debug logger creating
+// .ao/logs/ — can create the .ao/ directory without ever running Init.
 func (w *Workspace) Initialized() bool {
-	_, err := os.Stat(w.aoPath())
+	_, err := os.Stat(w.aoPath(stateFile))
 	return err == nil
 }
 

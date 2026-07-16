@@ -36,7 +36,7 @@ func TestSaveAndListHandoffs(t *testing.T) {
 		t.Fatalf("SaveHandoff 2 failed: %v", err)
 	}
 
-	records, err := s.ListHandoffs("proj", 0)
+	records, err := s.ListHandoffs("proj", ListFilter{})
 	if err != nil {
 		t.Fatalf("ListHandoffs failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestReindex(t *testing.T) {
 		t.Fatalf("Reindex failed: %v", err)
 	}
 
-	records, err := s.ListHandoffs("proj", 0)
+	records, err := s.ListHandoffs("proj", ListFilter{})
 	if err != nil {
 		t.Fatalf("ListHandoffs failed: %v", err)
 	}
@@ -90,6 +90,49 @@ func TestReindex(t *testing.T) {
 	}
 	if proj.CurrentStage != "documenting" || proj.HolderAgent != "a" {
 		t.Fatalf("unexpected project state after reindex: %+v", proj)
+	}
+}
+
+func TestListHandoffsFilter(t *testing.T) {
+	s, err := OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("OpenSQLite failed: %v", err)
+	}
+	defer s.Close()
+
+	base := time.Now().UTC()
+	must := func(e error) {
+		t.Helper()
+		if e != nil {
+			t.Fatalf("SaveHandoff failed: %v", e)
+		}
+	}
+	must(s.SaveHandoff(entry("claude-code", "antigravity-ide", "coding", "task 1", base)))
+	must(s.SaveHandoff(entry("antigravity-ide", "claude-code", "documenting", "task 2", base.Add(time.Second))))
+	must(s.SaveHandoff(entry("claude-code", "codex", "coding", "task 3", base.Add(2*time.Second))))
+
+	byStage, err := s.ListHandoffs("proj", ListFilter{Stage: "coding"})
+	if err != nil {
+		t.Fatalf("ListHandoffs by stage failed: %v", err)
+	}
+	if len(byStage) != 2 {
+		t.Fatalf("expected 2 coding-stage records, got %d", len(byStage))
+	}
+
+	byAgent, err := s.ListHandoffs("proj", ListFilter{Agent: "codex"})
+	if err != nil {
+		t.Fatalf("ListHandoffs by agent failed: %v", err)
+	}
+	if len(byAgent) != 1 || byAgent[0].Task != "task 3" {
+		t.Fatalf("expected 1 record involving codex, got %+v", byAgent)
+	}
+
+	combined, err := s.ListHandoffs("proj", ListFilter{Stage: "coding", Agent: "antigravity-ide", Limit: 1})
+	if err != nil {
+		t.Fatalf("ListHandoffs combined filter failed: %v", err)
+	}
+	if len(combined) != 1 || combined[0].Task != "task 1" {
+		t.Fatalf("unexpected combined filter result: %+v", combined)
 	}
 }
 

@@ -7,12 +7,17 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/ponthepmk/AgentOrchestra/internal/orchestrator"
 )
 
-// New builds an MCP server with all AgentOrchestra tools registered.
+// New builds an MCP server with all AgentOrchestra tools registered. Every
+// tool call is traced to slog's default logger (stderr by default) with
+// its name, duration, and outcome, in addition to the per-project debug
+// log each orchestrator operation writes to .ao/logs/ao.log.
 func New(version string) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "agentorchestra",
@@ -22,24 +27,44 @@ func New(version string) *mcp.Server {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "ao_init",
 		Description: "Initialize AgentOrchestra (.ao/ and .agentconfig) for a project directory. Idempotent — safe to call even if already initialized.",
-	}, handleInit)
+	}, logged("ao_init", handleInit))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "ao_status",
 		Description: "Get the current stage, holder agent, and last task for a project — call this first to see whose turn it is before doing work.",
-	}, handleStatus)
+	}, logged("ao_status", handleStatus))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "ao_handoff",
 		Description: "Hand off context to another agent: records what was done, what's requested next, and which artifacts are relevant. Call this when your part of the work is done.",
-	}, handleHandoff)
+	}, logged("ao_handoff", handleHandoff))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "ao_log",
-		Description: "List the handoff history for a project, most recent first.",
-	}, handleLog)
+		Description: "List the handoff history for a project, most recent first. Optionally filter by stage and/or agent.",
+	}, logged("ao_log", handleLog))
 
 	return server
+}
+
+// logged wraps a tool handler so every call is traced via slog — useful for
+// debugging what an agent actually called and when, independent of each
+// project's own .ao/logs/ao.log.
+func logged[In any](toolName string, h func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error)) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, req *mcp.CallToolRequest, args In) (*mcp.CallToolResult, any, error) {
+		start := time.Now()
+		res, out, err := h(ctx, req, args)
+		dur := time.Since(start)
+		switch {
+		case err != nil:
+			slog.Error("mcp tool call failed", "tool", toolName, "duration_ms", dur.Milliseconds(), "error", err)
+		case res != nil && res.IsError:
+			slog.Warn("mcp tool call returned error result", "tool", toolName, "duration_ms", dur.Milliseconds())
+		default:
+			slog.Info("mcp tool call ok", "tool", toolName, "duration_ms", dur.Milliseconds())
+		}
+		return res, out, err
+	}
 }
 
 type initArgs struct {
@@ -105,11 +130,13 @@ func handleHandoff(ctx context.Context, req *mcp.CallToolRequest, args handoffAr
 type logArgs struct {
 	ProjectDir string `json:"project_dir" jsonschema:"absolute path to the project's root directory"`
 	Limit      int    `json:"limit,omitempty" jsonschema:"max number of handoffs to return; 0 means all"`
+	Stage      string `json:"stage,omitempty" jsonschema:"only return handoffs at this stage"`
+	Agent      string `json:"agent,omitempty" jsonschema:"only return handoffs where this agent is the source or the target"`
 }
 
 func handleLog(ctx context.Context, req *mcp.CallToolRequest, args logArgs) (*mcp.CallToolResult, any, error) {
 	o := orchestrator.New(args.ProjectDir)
-	records, err := o.Log(args.Limit)
+	records, err := o.Log(orchestrator.LogFilter{Stage: args.Stage, Agent: args.Agent, Limit: args.Limit})
 	if err != nil {
 		return errResult(err), nil, nil
 	}

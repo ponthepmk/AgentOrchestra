@@ -1,6 +1,10 @@
 package orchestrator
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestFullHandoffCycle(t *testing.T) {
 	dir := t.TempDir()
@@ -37,7 +41,7 @@ func TestFullHandoffCycle(t *testing.T) {
 		t.Fatalf("unexpected status after handoff: %+v", st)
 	}
 
-	records, err := o.Log(0)
+	records, err := o.Log(LogFilter{})
 	if err != nil {
 		t.Fatalf("Log failed: %v", err)
 	}
@@ -49,7 +53,7 @@ func TestFullHandoffCycle(t *testing.T) {
 	if err := o.Reindex(); err != nil {
 		t.Fatalf("Reindex failed: %v", err)
 	}
-	records, err = o.Log(0)
+	records, err = o.Log(LogFilter{})
 	if err != nil {
 		t.Fatalf("Log after reindex failed: %v", err)
 	}
@@ -67,6 +71,25 @@ func TestHandoffRejectsUnknownStage(t *testing.T) {
 	_, err := o.Handoff(HandoffRequest{SourceAgent: "a", TargetAgent: "b", Stage: "deploying", Task: "x"})
 	if err == nil {
 		t.Fatal("expected error for stage outside configured set")
+	}
+}
+
+func TestStatusOnUninitializedDirStaysUninitialized(t *testing.T) {
+	dir := t.TempDir()
+	o := New(dir)
+
+	// Simulate the debug logger having created .ao/logs/ (e.g. from a
+	// prior failed call) without the workspace ever being `ao init`-ed.
+	// A bare .ao/ directory must never be mistaken for initialization.
+	if err := os.MkdirAll(filepath.Join(dir, ".ao", "logs"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if _, err := o.Status(); err == nil {
+		t.Fatal("expected error for uninitialized workspace despite .ao/ existing")
+	}
+	if _, err := o.Handoff(HandoffRequest{SourceAgent: "a", TargetAgent: "b", Task: "x"}); err == nil {
+		t.Fatal("expected Handoff to also reject the uninitialized workspace")
 	}
 }
 

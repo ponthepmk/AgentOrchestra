@@ -108,6 +108,34 @@ func TestInitStatusHandoffLogRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLogFilterByStageAndAgent(t *testing.T) {
+	session := connect(t)
+	dir := t.TempDir()
+	callText(t, session, "ao_init", map[string]any{
+		"project_dir": dir, "project_id": "proj",
+		"agents": []string{"claude-code", "antigravity-ide", "codex"},
+		"stages": []string{"planning", "coding", "documenting"},
+	})
+	callText(t, session, "ao_handoff", map[string]any{
+		"project_dir": dir, "source_agent": "claude-code", "target_agent": "antigravity-ide",
+		"stage": "coding", "task": "task 1",
+	})
+	callText(t, session, "ao_handoff", map[string]any{
+		"project_dir": dir, "source_agent": "antigravity-ide", "target_agent": "codex",
+		"stage": "documenting", "task": "task 2",
+	})
+
+	byStage := callText(t, session, "ao_log", map[string]any{"project_dir": dir, "stage": "coding"})
+	if !strings.Contains(byStage, "task 1") || strings.Contains(byStage, "task 2") {
+		t.Fatalf("expected stage filter to return only task 1, got: %s", byStage)
+	}
+
+	byAgent := callText(t, session, "ao_log", map[string]any{"project_dir": dir, "agent": "codex"})
+	if !strings.Contains(byAgent, "task 2") || strings.Contains(byAgent, "task 1") {
+		t.Fatalf("expected agent filter to return only task 2, got: %s", byAgent)
+	}
+}
+
 func TestStatusBeforeInitReturnsToolError(t *testing.T) {
 	session := connect(t)
 	dir := t.TempDir()

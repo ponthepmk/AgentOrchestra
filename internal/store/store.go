@@ -36,6 +36,13 @@ type HandoffRecord struct {
 	CreatedAt   time.Time
 }
 
+// ListFilter narrows down ListHandoffs results. Zero values mean "no filter".
+type ListFilter struct {
+	Stage string // exact match on the handoff's stage
+	Agent string // matches handoffs where Agent is either the source or the target
+	Limit int    // <= 0 means no limit
+}
+
 // Store indexes handoff history and per-project state for a workspace.
 type Store interface {
 	// SaveHandoff indexes a single new handoff and updates the project's
@@ -43,8 +50,8 @@ type Store interface {
 	SaveHandoff(entry Entry) error
 
 	// ListHandoffs returns indexed handoffs for a project, most recent
-	// first. limit <= 0 means no limit.
-	ListHandoffs(projectID string, limit int) ([]HandoffRecord, error)
+	// first, narrowed by filter.
+	ListHandoffs(projectID string, filter ListFilter) ([]HandoffRecord, error)
 
 	// ProjectState returns the indexed current state of a project.
 	ProjectState(projectID string) (ProjectRecord, error)

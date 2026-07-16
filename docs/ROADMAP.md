@@ -9,14 +9,27 @@
 - [x] MCP tools: `ao_init`, `ao_status`, `ao_handoff`, `ao_log`
 - [x] เอกสาร: SPEC, DATA_PIPELINE, DB_SCHEMA, ตัวอย่าง MCP config
 
+## Debug logging (เสริม Phase 1, ทำไปพร้อม Phase 2) ✅
+
+- [x] `internal/logging` — ทุก operation ของ orchestrator (`init`/`status`/`handoff`/`log`/`reindex`)
+      และทุก MCP tool call เขียน log แบบ JSON lines ลง `.ao/logs/ao.log` ต่อโปรเจกต์ (rotate อัตโนมัติ
+      ที่ 5MB) ใช้ debug ตอนหาว่า handoff ไหนพังเพราะอะไร โดยไม่กระทบการทำงานปกติแม้เขียน log ไม่ได้
+      (fallback เป็น no-op logger)
+- [x] MCP server เขียน trace แต่ละ tool call (ชื่อ tool, ระยะเวลา, สำเร็จ/ล้มเหลว) ไปที่ stderr
+      ผ่าน `log/slog` — client ส่วนใหญ่ (Claude Code ฯลฯ) เก็บ stderr ของ MCP server ไว้ให้เองอยู่แล้ว
+
 ## Phase 2 — Automated Artifact Sync
 
-- [ ] File watcher (`fsnotify`) เฝ้าดู `.md` / ไฟล์โค้ดที่เปลี่ยน แล้ว auto-trigger `ao_handoff`
-      ไปยัง agent ที่ทำ diagram/infographic (ตามสเปคตั้งต้น: "ดักจับไฟล์สเปคโปรเจกต์ ... ทริกเกอร์
-      ให้สร้างไดอะแกรมใหม่เสมอ")
+- [x] File watcher (`fsnotify`) — คำสั่ง `ao watch --from <agent> --to <agent> [--pattern glob]... [--stage stage] [dir]`
+      เฝ้าดูไฟล์ที่ตรง pattern (default `*.md`) แบบ recursive (ข้าม `.ao/.git/bin/node_modules/vendor`
+      และโฟลเดอร์ที่ขึ้นต้นด้วย `.` อื่นๆ) มี debounce กันยิงซ้ำตอน editor save รัว ๆ แล้ว auto-trigger
+      `ao_handoff` ไปยัง agent ที่ทำ diagram/infographic ทันทีที่ไฟล์เปลี่ยน (ตามสเปคตั้งต้น: "ดักจับไฟล์
+      สเปคโปรเจกต์ ... ทริกเกอร์ให้สร้างไดอะแกรมใหม่เสมอ") — ดู `internal/watcher/watcher.go`
+- [x] `ao_log` / `ao log` รองรับ filter ตาม `--stage` และ `--agent` แล้ว
 - [ ] MCP Resources: expose `.ao/state.json` และ handoff ล่าสุดเป็น MCP resource ที่ agent
       subscribe รับการเปลี่ยนแปลงได้แบบ real-time แทนการ poll ด้วย `ao_status`
-- [ ] `ao_log` รองรับ filter ตาม stage / agent
+- [ ] `ao watch` เป็น MCP tool ด้วย (ตอนนี้เป็น CLI-only เพราะเป็น long-running process ไม่เข้ากับ
+      MCP tool แบบ request/response — ต้องรอ MCP Resources/subscription ก่อนถึงจะออกแบบตรงนี้ได้ดี)
 
 ## Phase 3 — Home Lab / K3s
 

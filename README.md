@@ -55,6 +55,20 @@ ao handoff --from claude-code --to antigravity-ide \
   --task "สร้าง infographic อธิบาย LSTM+DNN architecture" \
   --artifact src/models/lstm_primary.py
 ao log                                        # ดูประวัติทั้งหมด
+ao log --stage documenting --agent antigravity-ide   # กรองตาม stage/agent
+```
+
+ทุกคำสั่งจะเขียน debug log (JSON lines) ลง `.ao/logs/ao.log` ของโปรเจกต์นั้นให้อัตโนมัติ — เปิดดูได้เวลา
+ต้องการรู้ว่า handoff ไหนพังเพราะอะไร (`tail -f .ao/logs/ao.log | jq`); ไฟล์ rotate เองเมื่อเกิน 5MB
+
+### 4) เปิด Automated Artifact Sync (ไม่บังคับ)
+
+ให้ `ao` เฝ้าดูไฟล์สเปค/โค้ดเอง แล้วส่งไม้ต่อให้ agent ที่ทำ diagram/docs ทันทีที่มีการแก้ไข โดยไม่ต้องรอ
+agent ต้นทางเรียก `ao_handoff` เอง:
+
+```bash
+ao watch --from claude-code --to antigravity-ide --stage documenting --pattern "*.md"
+# Ctrl+C เพื่อหยุด
 ```
 
 ## จำลองการทำงานแบบเต็ม (Simulation)
@@ -111,10 +125,12 @@ internal/
   model/       envelope.go   # Standard Payload + validation
   state/       stage.go      # state machine (stage ต่อโปรเจกต์)
   workspace/   workspace.go  # จัดการ .ao/ (source of truth)
-  store/       store.go, sqlite.go  # SQLite index (rebuildable)
+  store/       store.go, sqlite.go  # SQLite index (rebuildable, filter ตาม stage/agent)
   orchestrator/orchestrator.go      # business logic กลาง ใช้ร่วมกันทั้ง MCP และ CLI
+  logging/     logging.go    # debug log (.ao/logs/ao.log, JSON lines, rotate 5MB)
+  watcher/     watcher.go    # Automated Artifact Sync (fsnotify) — ใช้โดย `ao watch`
   mcpserver/   server.go     # MCP tools: ao_init/ao_status/ao_handoff/ao_log
-  cli/         cli.go        # CLI subcommands
+  cli/         cli.go        # CLI subcommands (init/status/handoff/log/watch)
 docs/
   SPEC.md              # ข้อกำหนดทางเทคนิคเต็ม + เหตุผลการตัดสินใจ
   DATA_PIPELINE.md     # Standard Payload schema เต็ม
