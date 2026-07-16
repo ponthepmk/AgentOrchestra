@@ -24,6 +24,31 @@
 claude mcp add agentorchestra -- ao mcp
 ```
 
+## Claude Desktop
+
+Claude Desktop ใช้ config ไฟล์เดียวระดับเครื่อง (ไม่ใช่ต่อโปรเจกต์แบบ `.mcp.json`) — แก้ไฟล์
+`claude_desktop_config.json`:
+
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux:** `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "agentorchestra": {
+      "command": "/absolute/path/to/ao",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+ต้องใช้ **absolute path** ไปที่ binary เสมอ (ต่างจาก Claude Code CLI ที่หา `ao` ใน `PATH` ให้ได้) แล้ว
+**restart Claude Desktop ทั้งแอป** ให้โหลด config ใหม่ เนื่องจาก config นี้เป็นระดับเครื่อง ไม่ใช่ต่อ
+โปรเจกต์ — ทุก tool call จึงต้องระบุ `project_dir` เป็น absolute path เสมอ (ซึ่ง `ao` ออกแบบไว้แบบนี้
+อยู่แล้ว ไม่ได้อิง current working directory ของตัว server)
+
 ## Codex CLI
 
 เพิ่มใน `~/.codex/config.toml`:
