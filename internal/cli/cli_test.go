@@ -7,6 +7,7 @@ import (
 )
 
 func TestInitStatusHandoffLog(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	dir := t.TempDir()
 	var out, errBuf bytes.Buffer
 
@@ -37,6 +38,7 @@ func TestInitStatusHandoffLog(t *testing.T) {
 }
 
 func TestLogFilterFlags(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	dir := t.TempDir()
 	var out, errBuf bytes.Buffer
 
@@ -64,6 +66,7 @@ func TestLogFilterFlags(t *testing.T) {
 }
 
 func TestWatchMissingRequiredFlags(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	dir := t.TempDir()
 	var out, errBuf bytes.Buffer
 	Run([]string{"init", "--id", "proj", dir}, &out, &errBuf)
@@ -75,6 +78,7 @@ func TestWatchMissingRequiredFlags(t *testing.T) {
 }
 
 func TestWatchRejectsNonexistentDir(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	var out, errBuf bytes.Buffer
 	if code := Run([]string{"watch", "--from", "a", "--to", "b", "/nonexistent/path/does-not-exist"}, &out, &errBuf); code == 0 {
 		t.Fatal("expected error for nonexistent directory")
@@ -82,6 +86,7 @@ func TestWatchRejectsNonexistentDir(t *testing.T) {
 }
 
 func TestUnknownCommand(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	var out, errBuf bytes.Buffer
 	if code := Run([]string{"bogus"}, &out, &errBuf); code != 2 {
 		t.Fatalf("expected exit code 2 for unknown command, got %d", code)
@@ -89,6 +94,7 @@ func TestUnknownCommand(t *testing.T) {
 }
 
 func TestHandoffMissingRequiredFlags(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	dir := t.TempDir()
 	var out, errBuf bytes.Buffer
 	Run([]string{"init", "--id", "proj", dir}, &out, &errBuf)

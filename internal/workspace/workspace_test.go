@@ -17,7 +17,7 @@ func TestInitCreatesStateAndConfig(t *testing.T) {
 		t.Fatal("expected fresh dir to not be initialized")
 	}
 
-	if err := w.Init("ai-trading-hub", []string{"claude-code", "antigravity-ide"}, []string{"planning", "coding", "documenting"}); err != nil {
+	if err := w.Init("ai-trading-hub", AgentsFromNames([]string{"claude-code", "antigravity-ide"}), []string{"planning", "coding", "documenting"}); err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 	if !w.Initialized() {
@@ -47,6 +47,41 @@ func TestInitCreatesStateAndConfig(t *testing.T) {
 	}
 }
 
+func TestAgentConfigBackwardCompatibleYAML(t *testing.T) {
+	dir := t.TempDir()
+	// Old format: agents as plain strings.
+	oldYAML := "project_id: legacy\nagents:\n  - claude-code\n  - antigravity-ide\nstages:\n  - planning\n  - coding\n"
+	if err := os.WriteFile(filepath.Join(dir, ".agentconfig"), []byte(oldYAML), 0o644); err != nil {
+		t.Fatalf("write old .agentconfig: %v", err)
+	}
+	cfg, err := Open(dir).LoadAgentConfig()
+	if err != nil {
+		t.Fatalf("LoadAgentConfig failed on legacy format: %v", err)
+	}
+	if len(cfg.Agents) != 2 || cfg.Agents[0].Name != "claude-code" {
+		t.Fatalf("unexpected agents from legacy format: %+v", cfg.Agents)
+	}
+
+	// New format: agents as objects with capabilities.
+	newYAML := "project_id: modern\nagents:\n  - name: claude-code\n    description: coder\n    capabilities: [planning, coding]\n  - antigravity-ide\n"
+	if err := os.WriteFile(filepath.Join(dir, ".agentconfig"), []byte(newYAML), 0o644); err != nil {
+		t.Fatalf("write new .agentconfig: %v", err)
+	}
+	cfg, err = Open(dir).LoadAgentConfig()
+	if err != nil {
+		t.Fatalf("LoadAgentConfig failed on mixed format: %v", err)
+	}
+	if len(cfg.Agents) != 2 || cfg.Agents[0].Description != "coder" || len(cfg.Agents[0].Capabilities) != 2 {
+		t.Fatalf("unexpected agents from new format: %+v", cfg.Agents)
+	}
+	if cfg.Agents[1].Name != "antigravity-ide" {
+		t.Fatalf("mixed string entry not parsed: %+v", cfg.Agents[1])
+	}
+	if !cfg.HasAgent("antigravity-ide") || cfg.HasAgent("stranger") {
+		t.Fatal("HasAgent misbehaving")
+	}
+}
+
 func TestInitializedRequiresStateFileNotJustDir(t *testing.T) {
 	dir := t.TempDir()
 	w := Open(dir)
@@ -64,14 +99,14 @@ func TestInitializedRequiresStateFileNotJustDir(t *testing.T) {
 func TestInitIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	w := Open(dir)
-	if err := w.Init("proj", []string{"a", "b"}, nil); err != nil {
+	if err := w.Init("proj", AgentsFromNames([]string{"a", "b"}), nil); err != nil {
 		t.Fatalf("first Init failed: %v", err)
 	}
 	// Simulate a handoff having advanced state, then re-run Init.
 	if err := w.WriteState(State{ProjectID: "proj", CurrentStage: "coding", HolderAgent: "b", UpdatedAt: time.Now()}); err != nil {
 		t.Fatalf("WriteState failed: %v", err)
 	}
-	if err := w.Init("proj", []string{"a", "b"}, nil); err != nil {
+	if err := w.Init("proj", AgentsFromNames([]string{"a", "b"}), nil); err != nil {
 		t.Fatalf("second Init failed: %v", err)
 	}
 	st, err := w.ReadState()
@@ -86,7 +121,7 @@ func TestInitIsIdempotent(t *testing.T) {
 func TestWriteHandoffSequenceAndState(t *testing.T) {
 	dir := t.TempDir()
 	w := Open(dir)
-	if err := w.Init("proj", []string{"claude-code", "antigravity-ide"}, []string{"planning", "coding", "documenting"}); err != nil {
+	if err := w.Init("proj", AgentsFromNames([]string{"claude-code", "antigravity-ide"}), []string{"planning", "coding", "documenting"}); err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ponthepmk/AgentOrchestra/internal/orchestrator"
+	"github.com/ponthepmk/AgentOrchestra/internal/workspace"
 )
 
 func discardLogger() *slog.Logger {
@@ -18,7 +19,7 @@ func discardLogger() *slog.Logger {
 func TestWatcherTriggersHandoffOnMatchingFile(t *testing.T) {
 	dir := t.TempDir()
 	orc := orchestrator.New(dir)
-	if err := orc.Init("proj", []string{"claude-code", "antigravity-ide"}, []string{"planning", "coding", "documenting"}); err != nil {
+	if err := orc.Init("proj", workspace.AgentsFromNames([]string{"claude-code", "antigravity-ide"}), []string{"planning", "coding", "documenting"}); err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 
@@ -68,10 +69,51 @@ func TestWatcherTriggersHandoffOnMatchingFile(t *testing.T) {
 	}
 }
 
+func TestWatcherNeverTriggersOnHandoffMirror(t *testing.T) {
+	dir := t.TempDir()
+	orc := orchestrator.New(dir)
+	if err := orc.Init("proj", workspace.AgentsFromNames([]string{"claude-code", "antigravity-ide"}), nil); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	w, err := New(Config{
+		Dir: dir, SourceAgent: "claude-code", TargetAgent: "antigravity-ide",
+		Patterns: []string{"*.md"}, Debounce: 30 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- w.Run(ctx, discardLogger()) }()
+
+	// A real handoff regenerates HANDOFF.md in the watched dir. If the
+	// watcher reacted to it, each auto-handoff would trigger the next one
+	// forever.
+	if _, err := orc.Handoff(orchestrator.HandoffRequest{
+		SourceAgent: "claude-code", TargetAgent: "antigravity-ide", Task: "seed",
+	}); err != nil {
+		t.Fatalf("Handoff failed: %v", err)
+	}
+
+	time.Sleep(400 * time.Millisecond)
+	cancel()
+	<-done
+
+	recs, err := orc.Log(orchestrator.LogFilter{})
+	if err != nil {
+		t.Fatalf("Log failed: %v", err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("expected only the seed handoff (no HANDOFF.md feedback loop), got %d records", len(recs))
+	}
+}
+
 func TestWatcherIgnoresNonMatchingFile(t *testing.T) {
 	dir := t.TempDir()
 	orc := orchestrator.New(dir)
-	if err := orc.Init("proj", []string{"claude-code", "antigravity-ide"}, nil); err != nil {
+	if err := orc.Init("proj", workspace.AgentsFromNames([]string{"claude-code", "antigravity-ide"}), nil); err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 

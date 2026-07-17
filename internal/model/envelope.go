@@ -10,6 +10,7 @@ import (
 // Payload carries the actual work request between agents.
 type Payload struct {
 	Task      string         `json:"task"`
+	Notes     string         `json:"notes,omitempty"` // free-form markdown context for the target agent
 	Artifacts []string       `json:"artifacts,omitempty"`
 	Extra     map[string]any `json:"extra,omitempty"`
 }

@@ -36,17 +36,22 @@ Codex ช่วยรีวิว ฯลฯ) ในโปรเจกต์เ�
 2. **`internal/store`** — SQLite index สำหรับ query เร็ว (`ao log`, ค้นประวัติ) เป็น derived data
    ล้วนๆ ลบทิ้งแล้ว `ao log --reindex` สร้างใหม่จากไฟล์ได้เสมอ
 
-## 4. MCP Tools (Phase 1)
+## 4. MCP Tools
+
+ทุก tool อ้างโปรเจกต์ได้ 3 แบบ: `project_dir` (absolute path — ชนะเสมอ), `project_id`
+(ชื่อที่ลงทะเบียนใน registry), หรือ**ไม่ระบุเลย** (ใช้ default project) — ดูหัวข้อ 8 Registry
 
 | Tool | หน้าที่ |
 |---|---|
-| `ao_init(project_dir, project_id, agents[], stages[])` | สร้าง `.ao/` + `.agentconfig` ให้โปรเจกต์ (idempotent) |
-| `ao_status(project_dir)` | คืน stage ปัจจุบัน, agent ที่ถือไม้อยู่, task ล่าสุด |
-| `ao_handoff(project_dir, source_agent, target_agent, stage, task, artifacts[], extra{})` | validate แล้วบันทึกการส่งไม้ต่อ |
-| `ao_log(project_dir, limit, stage, agent)` | ประวัติการส่งไม้ต่อ ล่าสุดก่อน กรองได้ด้วย `stage` และ/หรือ `agent` |
+| `ao_init(project_dir, project_id, agents[], stages[])` | สร้าง `.ao/` + `.agentconfig` + scaffold (`.mcp.json`, CLAUDE.md, AGENTS.md) + ลงทะเบียน registry (idempotent); ไม่ระบุ agents = ได้ team preset |
+| `ao_agents(project…, agent)` | ทีมของโปรเจกต์: ชื่อ, description, capabilities, สถานะ online/last_seen — **tool แรกที่ agent ควรเรียกตอน connect**; ส่ง `agent` (ชื่อตัวเอง) เพื่อให้เพื่อนเห็นว่า online |
+| `ao_status(project…, agent)` | stage ปัจจุบัน, ผู้ถือไม้, task + notes ล่าสุด |
+| `ao_handoff(project…, source_agent, target_agent, stage, task, notes, artifacts[], extra{})` | validate (รวม target ต้องอยู่ในทีม) แล้วบันทึกการส่งไม้ต่อ + เจน HANDOFF.md |
+| `ao_log(project…, limit, stage, agent)` | ประวัติการส่งไม้ต่อ ล่าสุดก่อน กรองได้ |
+| `ao_projects()` | โปรเจกต์ทั้งหมดที่ลงทะเบียนบนเครื่อง + ตัวไหนเป็น default |
 
-Agent ทุกตัวที่ต่อ MCP server นี้จะเห็น tool ทั้ง 4 นี้ในรายการ tool ของตัวเองทันที และเรียกเองได้ตาม
-system prompt/instruction ที่ผู้ใช้ตั้งไว้ (เช่น "ก่อนเริ่มงานให้เรียก `ao_status` ก่อนเสมอ")
+`ao_init` เจนกติกาลง `CLAUDE.md`/`AGENTS.md` ให้เอง — agent จะถูกสอนว่า *"เริ่ม session เรียก
+`ao_agents` → `ao_status`, จบงานเรียก `ao_handoff`"* โดยผู้ใช้ไม่ต้อง copy อะไร
 
 `ao watch` (Automated Artifact Sync, ดูข้อ 6) เป็น **CLI-only** ไม่ใช่ MCP tool เพราะเป็น
 long-running process ที่ไม่เข้ากับรูปแบบ request/response ของ MCP tool call — รอ MCP Resources/
@@ -89,7 +94,40 @@ MCP server เพิ่มเติมอีกชั้น: ทุก tool call
 
 ดู `internal/logging/logging.go`
 
-## 8. ดูเพิ่มเติม
+## 8. Project Registry (เลิกพิมพ์ absolute path)
+
+`~/.config/ao/projects.json` (override ด้วย env `AO_CONFIG_DIR`) เก็บ map `project_id → directory`
+— `ao init` ลงทะเบียนให้อัตโนมัติ โปรเจกต์แรกเป็น default ลำดับการ resolve:
+`project_dir` (ชนะเสมอ) → `project_id` → default → error พร้อมรายชื่อที่รู้จัก
+
+จำเป็นสำหรับ **Claude Desktop** ซึ่ง config เป็นระดับเครื่อง ไม่รู้จัก "โปรเจกต์ปัจจุบัน" — พอมี registry,
+agent เรียก `ao_status()` เปล่าๆ ก็ได้คำตอบของโปรเจกต์ default ทันที ดู `internal/registry/registry.go`
+
+## 9. Capabilities + Presence (ทีมรู้จักกัน)
+
+`.agentconfig` เก็บ agent เป็น object `{name, description, capabilities[]}` (backward compatible กับ
+list string เดิมผ่าน custom YAML unmarshal — ดู `internal/workspace`) `ao_agents` คืน roster พร้อม
+สถานะ online จาก heartbeat ใน `.ao/presence/<agent>.json` (touch เมื่อ handoff / ระบุตัวเองใน
+status/agents / worker poll; online = last_seen < 10 นาที ดู `internal/presence`)
+
+`ao_handoff` validate ว่า `target_agent` อยู่ใน roster — ส่งงานผิดตัว/พิมพ์ชื่อผิดโดน reject ทันที
+
+## 10. `ao worker` — ตัวขับ LLM local
+
+Ollama / LM Studio / llama.cpp / vLLM เป็นแค่ model server ต่อ MCP เองไม่ได้ — `ao worker`
+(`internal/worker`) เป็นตัวกลาง: poll `state.json` ทุก `--poll` (default 5s) → ถ้าไม้อยู่ที่ `--agent`:
+ประกอบ prompt จาก task + notes + เนื้อไฟล์ artifacts (จำกัด ~32KB) → POST
+`{--url}/chat/completions` (OpenAI-compatible จึงรองรับทั้ง 4 ค่ายด้วยโค้ดเดียว) → เขียนผลลง
+`.ao/outputs/NNN-<agent>.md` → ส่งไม้กลับหาผู้ส่ง (default `--handoff-back=true`) กันงานซ้ำด้วย
+fingerprint ของ handoff ล่าสุด; model server ล่ม = log แล้ว retry รอบถัดไป ไม่ crash
+
+## 11. HANDOFF.md Mirror
+
+ทุก handoff เจน `HANDOFF.md` ที่ root โปรเจกต์ (one-way mirror — เขียนทับเสมอ ไม่อ่านกลับ):
+สถานะปัจจุบัน + notes + artifacts + ประวัติ 5 รายการล่าสุด เพื่อให้ agent ที่ไม่มี MCP และมนุษย์
+อ่านสถานะได้จากไฟล์เดียว watcher จะไม่ trigger จากไฟล์นี้ (กัน loop)
+
+## 12. ดูเพิ่มเติม
 
 - [`DATA_PIPELINE.md`](./DATA_PIPELINE.md) — Standard Payload / JSON Schema เต็ม
 - [`DB_SCHEMA.md`](./DB_SCHEMA.md) — โครงสร้าง SQLite index

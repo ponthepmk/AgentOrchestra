@@ -1,11 +1,14 @@
 # วิธีต่อ `ao` เข้ากับแต่ละ Agent
 
 หลัง `make build` จะได้ binary ที่ `bin/ao` — เอาไปวางใน `PATH` (เช่น `cp bin/ao /usr/local/bin/ao`)
-แล้วตั้งค่าให้แต่ละ agent รู้จัก MCP server นี้
+
+> **ทางลัด:** `ao init --id <project>` เจน `.mcp.json`, `CLAUDE.md`, `AGENTS.md` ให้อัตโนมัติ
+> และพิมพ์ config ของ Claude Desktop ให้ copy — ส่วนใหญ่ไม่ต้องตั้งอะไรในหน้านี้เองเลย
+> หน้านี้เก็บไว้อ้างอิงกรณีต้องตั้งเองหรือใช้ agent ที่ init ไม่ครอบคลุม
 
 ## Claude Code
 
-เพิ่มใน `.mcp.json` ที่ root ของโปรเจกต์ที่จะให้ Claude Code ทำงานด้วย:
+`ao init` สร้าง `.mcp.json` ให้แล้ว ถ้าต้องทำเอง:
 
 ```json
 {
@@ -23,6 +26,11 @@
 ```bash
 claude mcp add agentorchestra -- ao mcp
 ```
+
+## OpenCode
+
+อ่าน `.mcp.json` เดียวกับ Claude Code (หรือเพิ่มใน config ของ OpenCode ด้วย command `ao`, args
+`["mcp"]` แบบ stdio) และอ่านกติกาจาก `AGENTS.md` ที่ `ao init` เจนให้
 
 ## Claude Desktop
 
@@ -45,9 +53,13 @@ Claude Desktop ใช้ config ไฟล์เดียวระดับเค
 ```
 
 ต้องใช้ **absolute path** ไปที่ binary เสมอ (ต่างจาก Claude Code CLI ที่หา `ao` ใน `PATH` ให้ได้) แล้ว
-**restart Claude Desktop ทั้งแอป** ให้โหลด config ใหม่ เนื่องจาก config นี้เป็นระดับเครื่อง ไม่ใช่ต่อ
-โปรเจกต์ — ทุก tool call จึงต้องระบุ `project_dir` เป็น absolute path เสมอ (ซึ่ง `ao` ออกแบบไว้แบบนี้
-อยู่แล้ว ไม่ได้อิง current working directory ของตัว server)
+**restart Claude Desktop ทั้งแอป** ให้โหลด config ใหม่ (`ao init` พิมพ์ config พร้อม path ที่ถูกต้อง
+ให้ copy อยู่แล้ว)
+
+เนื่องจาก config นี้เป็นระดับเครื่อง ไม่ใช่ต่อโปรเจกต์ — ใช้ **project registry** ช่วย: โปรเจกต์ที่
+`ao init` แล้วถูกลงทะเบียนไว้ ทำให้ Claude Desktop เรียก tool ด้วย `project_id: "my-project"` สั้นๆ
+หรือไม่ระบุเลย (ได้ default project) แทนการพิมพ์ absolute path ทุกครั้ง — ดูรายการโปรเจกต์ด้วย tool
+`ao_projects`
 
 ## Codex CLI
 
@@ -68,15 +80,29 @@ args = ["mcp"]
 
 (รูปแบบ config อาจต่างกันตามเวอร์ชัน Antigravity — ดูเอกสาร MCP ของ Antigravity IDE ประกอบ)
 
-## หลังต่อเสร็จ
+## LLM local (Ollama / LM Studio / llama.cpp / vLLM)
 
-บอก agent ผ่าน custom instruction / system prompt ของตัวเอง เช่นใน `CLAUDE.md`:
+Model server พวกนี้**ต่อ MCP เองไม่ได้** — ใช้ `ao worker` เป็นตัวขับแทน (ไม่ต้องตั้ง config ในแอปไหน):
 
-```markdown
-โปรเจกต์นี้ใช้ AgentOrchestra ประสานงานกับ agent อื่น:
-- เริ่มงานทุกครั้ง: เรียก `ao_status` ก่อน เพื่อดูว่าตอนนี้ถึงขั้นไหน ใครถือไม้อยู่
-- จบงานทุกครั้ง: เรียก `ao_handoff` ระบุ target_agent, task ที่ต้องทำต่อ, และ artifacts ที่เกี่ยวข้อง
+```bash
+ao worker --agent ollama-worker --url http://localhost:11434/v1 --model qwen2.5:3b   # Ollama
+ao worker --agent ollama-worker --url http://localhost:1234/v1  --model <model>     # LM Studio
+ao worker --agent ollama-worker --url http://localhost:8080/v1  --model default     # llama.cpp
+ao worker --agent ollama-worker --url http://localhost:8000/v1  --model <model>     # vLLM
 ```
 
-ทำแบบเดียวกันในไฟล์ instruction ของ agent อื่น (เช่น system prompt ของ Antigravity, Codex) โดยเปลี่ยน
-เฉพาะชื่อ agent — ทุกตัวคุยผ่าน `.ao/` ไฟล์เดียวกัน ไม่ว่าจะเป็น agent ค่ายไหน
+เปิดทิ้งไว้ — งานที่ handoff ถึง `ollama-worker` จะถูกทำและส่งไม้กลับอัตโนมัติ
+
+## หลังต่อเสร็จ
+
+`ao init` เจนกติกาลง `CLAUDE.md` (Claude Code/Desktop) และ `AGENTS.md` (Codex, OpenCode,
+Antigravity) ให้แล้ว — ใจความคือ:
+
+```markdown
+- เริ่ม session: เรียก `ao_agents` ดูทีม+ความถนัด+ใคร online แล้ว `ao_status` ดูว่างานถึงตาใคร
+- จบงานทุกครั้ง: เรียก `ao_handoff` ระบุ target_agent (เลือกตาม capabilities), task, notes, artifacts
+- ระบุตัวเองด้วย arg `agent` เพื่อให้เพื่อนร่วมทีมเห็นว่า online
+```
+
+ถ้า agent ตัวไหนไม่อ่านทั้งสองไฟล์นี้ ให้ copy ข้อความนี้ไปใส่ system prompt ของมันเอง — ทุกตัวคุยผ่าน
+`.ao/` ไฟล์เดียวกัน ไม่ว่าจะเป็น agent ค่ายไหน

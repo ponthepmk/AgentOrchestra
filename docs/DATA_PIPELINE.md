@@ -14,6 +14,7 @@ call (`ao_handoff`) หรือ CLI (`ao handoff`) — ทั้งสองท
   "target_agent": "antigravity-ide",
   "payload": {
     "task": "สร้าง infographic อธิบายสถาปัตยกรรม LSTM+DNN meta-labeling",
+    "notes": "โฟกัสที่ flow LSTM->DNN และ triple-barrier; โทนสี minimal; อ้างอิงตัวเลขจาก README",
     "artifacts": [
       "src/models/lstm_primary.py",
       "src/models/dnn_meta.py"
@@ -38,6 +39,7 @@ call (`ao_handoff`) หรือ CLI (`ao handoff`) — ทั้งสองท
 | `source_agent` | string | ✅ | agent ที่ส่งไม้ (ต้องต่างจาก `target_agent`) |
 | `target_agent` | string | ✅ | agent ที่รับไม้ต่อ |
 | `payload.task` | string | ✅ | สิ่งที่ให้ agent ปลายทางทำต่อ — ข้อความสั้นๆ ที่เป็น instruction ตรงตัว |
+| `payload.notes` | string | – | บริบทยาวแบบ free-form (markdown ได้) — การตัดสินใจที่ทำไปแล้ว, จุดที่ต้องระวัง, ที่ที่ควรไปดู |
 | `payload.artifacts` | []string | – | path ไฟล์ที่เกี่ยวข้อง (relative กับ project root) |
 | `payload.extra` | object | – | ข้อมูลเสริมแบบ key-value อิสระ (เช่น `architecture_type`, `output_format` ตามสเปคตั้งต้น) |
 | `metadata.timestamp` | RFC3339 datetime | ✅ (auto) | เติมอัตโนมัติโดย `ao` ตอนบันทึก |

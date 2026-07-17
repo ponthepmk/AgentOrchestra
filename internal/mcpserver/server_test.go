@@ -50,6 +50,7 @@ func callText(t *testing.T, session *mcp.ClientSession, tool string, args map[st
 }
 
 func TestListTools(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	session := connect(t)
 	res, err := session.ListTools(context.Background(), nil)
 	if err != nil {
@@ -59,14 +60,62 @@ func TestListTools(t *testing.T) {
 	for _, tool := range res.Tools {
 		names[tool.Name] = true
 	}
-	for _, want := range []string{"ao_init", "ao_status", "ao_handoff", "ao_log"} {
+	for _, want := range []string{"ao_init", "ao_status", "ao_handoff", "ao_log", "ao_agents", "ao_projects"} {
 		if !names[want] {
 			t.Errorf("expected tool %q to be registered, got %v", want, names)
 		}
 	}
 }
 
+func TestAgentsAndDefaultProjectResolution(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
+	session := connect(t)
+	dir := t.TempDir()
+
+	// Init with the team preset (no agents arg) — registers dir as default.
+	callText(t, session, "ao_init", map[string]any{"project_dir": dir, "project_id": "proj"})
+
+	// ao_agents with NO project reference must resolve via the default, and
+	// passing our own name must mark us online.
+	agentsMsg := callText(t, session, "ao_agents", map[string]any{"agent": "claude-code"})
+	for _, want := range []string{"claude-code", "codex", "antigravity-ide", "ollama-worker", "infographic"} {
+		if !strings.Contains(agentsMsg, want) {
+			t.Errorf("expected ao_agents to mention %q, got: %s", want, agentsMsg)
+		}
+	}
+	if !strings.Contains(agentsMsg, "claude-code [ONLINE]") {
+		t.Errorf("expected claude-code to be online after identifying itself, got: %s", agentsMsg)
+	}
+
+	// ao_status without project_dir works via the default project too.
+	statusMsg := callText(t, session, "ao_status", map[string]any{})
+	if !strings.Contains(statusMsg, "project: proj") {
+		t.Fatalf("expected default-project status, got: %s", statusMsg)
+	}
+
+	// ao_projects lists the registered project as default.
+	projMsg := callText(t, session, "ao_projects", map[string]any{})
+	if !strings.Contains(projMsg, "proj (default)") {
+		t.Fatalf("expected ao_projects to list default project, got: %s", projMsg)
+	}
+
+	// Handing off to an agent outside the roster is rejected.
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "ao_handoff",
+		Arguments: map[string]any{
+			"source_agent": "claude-code", "target_agent": "ghost", "task": "x",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool failed: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected tool error for target agent not on the team")
+	}
+}
+
 func TestInitStatusHandoffLogRoundTrip(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	session := connect(t)
 	dir := t.TempDir()
 
@@ -109,6 +158,7 @@ func TestInitStatusHandoffLogRoundTrip(t *testing.T) {
 }
 
 func TestLogFilterByStageAndAgent(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	session := connect(t)
 	dir := t.TempDir()
 	callText(t, session, "ao_init", map[string]any{
@@ -137,6 +187,7 @@ func TestLogFilterByStageAndAgent(t *testing.T) {
 }
 
 func TestStatusBeforeInitReturnsToolError(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	session := connect(t)
 	dir := t.TempDir()
 
@@ -153,6 +204,7 @@ func TestStatusBeforeInitReturnsToolError(t *testing.T) {
 }
 
 func TestHandoffStructuredOutput(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	session := connect(t)
 	dir := t.TempDir()
 	callText(t, session, "ao_init", map[string]any{"project_dir": dir, "project_id": "proj"})

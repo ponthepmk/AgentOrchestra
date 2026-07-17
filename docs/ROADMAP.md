@@ -31,6 +31,20 @@
 - [ ] `ao watch` เป็น MCP tool ด้วย (ตอนนี้เป็น CLI-only เพราะเป็น long-running process ไม่เข้ากับ
       MCP tool แบบ request/response — ต้องรอ MCP Resources/subscription ก่อนถึงจะออกแบบตรงนี้ได้ดี)
 
+## Usability Phase — ใช้งานง่าย + ทีมรู้จักกัน + LLM local ✅
+
+- [x] `ao init` คำสั่งเดียวจบ: `.agentconfig` (team preset 4 ตัวพร้อม capabilities), `.mcp.json`,
+      CLAUDE.md/AGENTS.md (กติกา ao_*), .gitignore, ลงทะเบียน registry, พิมพ์ Claude Desktop config
+- [x] Project registry (`~/.config/ao/projects.json`) — เรียกด้วย `--project <id>` / `project_id`
+      หรือไม่ระบุเลย (default) แทน absolute path
+- [x] `ao_agents` / `ao agents` — capabilities + presence (🟢 online / last seen)
+- [x] `ao_handoff` validate target ต้องอยู่ในทีม
+- [x] `payload.notes` — บริบทยาวส่งต่อได้ครบ, แสดงใน status + HANDOFF.md
+- [x] `HANDOFF.md` mirror ที่ root ทุก handoff (อ่านได้โดยไม่ต้องมี MCP; watcher กัน loop แล้ว)
+- [x] `ao watch --notify` — desktop notification (notify-send / osascript)
+- [x] `ao worker` — ตัวขับ Ollama / LM Studio / llama.cpp / vLLM (OpenAI-compatible):
+      รับงาน → เขียนผล `.ao/outputs/` → ส่งไม้กลับอัตโนมัติ + presence heartbeat
+
 ## Phase 3 — Home Lab / K3s
 
 - [ ] `PostgresStore` (implement `store.Store` เดิม) สำหรับ deploy บน K3s แชร์ระหว่างหลายเครื่อง

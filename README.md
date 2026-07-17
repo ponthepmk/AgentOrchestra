@@ -1,142 +1,125 @@
 # AgentOrchestra (AO)
 
 **Multi-Agent Orchestrator** — ตัว "วาทยากร" ที่ส่งต่อ context ระหว่าง AI agent หลายตัว
-(Claude Code, Codex, Antigravity IDE ฯลฯ) ในโปรเจกต์เดียวกัน โดยไม่ต้อง copy-paste เอง
+(Claude Code, Claude Desktop, Codex, Antigravity IDE, OpenCode, LLM local) ในโปรเจกต์เดียวกัน
+โดยไม่ต้อง copy-paste เอง
 
-ต่อผ่าน **MCP (Model Context Protocol)** — มาตรฐานกลางที่ agent เกือบทุกค่ายรองรับ — ไม่ใช่ plugin
-เฉพาะของ tool ใดตัวหนึ่ง เขียนด้วย **Go** เป็น binary เดียว รันได้ทั้งบนเครื่องตัวเองและ K3s Home Lab
+ต่อผ่าน **MCP (Model Context Protocol)** — มาตรฐานกลางที่ agent เกือบทุกค่ายรองรับ — เขียนด้วย **Go**
+เป็น binary เดียว รันได้ทั้งบนเครื่องตัวเองและ K3s Home Lab
 
 ## สถาปัตยกรรม
 
 ```
-[Claude Code]──┐ (MCP / stdio)
-[Antigravity]──┼──> ao (Go binary, MCP server) ──> .ao/ files (source of truth)
-[Codex]────────┘         │                          └─> SQLite index (.ao/index.db, rebuildable)
-                         └─ CLI สำหรับมนุษย์: ao init / status / handoff / log
+[Claude Code]────┐ (MCP / stdio)
+[Claude Desktop]─┤
+[Antigravity]────┼──> ao (Go binary, MCP server) ──> .ao/ files (source of truth)
+[Codex/OpenCode]─┘         │                          ├─> SQLite index (rebuildable)
+                           │                          ├─> .ao/presence/ (ใคร online)
+[Ollama/LM Studio/  <── ao worker (ตัวขับ LLM local)  └─> HANDOFF.md (mirror อ่านง่าย)
+ llama.cpp/vLLM]           │
+                           └─ CLI สำหรับมนุษย์: ao init / status / agents / handoff / log / watch
 ```
 
 - **`.ao/` ในโปรเจกต์เป้าหมาย = source of truth** — เป็นไฟล์ธรรมดา commit เข้า git ได้ ติดไปกับ repo
-- **SQLite = index รอง** ที่ rebuild ได้เสมอจากไฟล์ (`ao log --reindex`)
-- **binary เดียว 2 โหมด:** `ao mcp` (ให้ agent ต่อผ่าน MCP) และ CLI ปกติ (ให้คนสั่งเอง) — logic
-  ชุดเดียวกันทั้งคู่ (`internal/orchestrator`) จึงเห็นสถานะตรงกันเสมอ
+- **SQLite = index รอง** ที่ rebuild ได้เสมอ (`ao log --reindex`)
+- **binary เดียวหลายโหมด:** `ao mcp` (ให้ agent ต่อ), `ao worker` (ขับ LLM local), CLI (คนสั่งเอง) —
+  logic ชุดเดียวกัน (`internal/orchestrator`) จึงเห็นสถานะตรงกันเสมอ
 
-รายละเอียดเหตุผลการออกแบบทั้งหมด: [`docs/SPEC.md`](./docs/SPEC.md)
+เหตุผลการออกแบบทั้งหมด: [`docs/SPEC.md`](./docs/SPEC.md)
 
-## เริ่มใช้งาน
-
-```bash
-make build          # ได้ bin/ao
-cp bin/ao /usr/local/bin/ao   # หรือใส่ PATH เอง
-```
-
-### 1) ต่อเข้ากับ agent ที่ใช้
-
-ดูตัวอย่าง config แต่ละตัวที่ [`docs/examples/mcp-config.md`](./docs/examples/mcp-config.md)
-(Claude Code, Codex CLI, Antigravity IDE)
-
-### 2) เริ่มโปรเจกต์
+## เริ่มใช้งาน — คำสั่งเดียวจบ
 
 ```bash
+make build && cp bin/ao /usr/local/bin/ao   # ครั้งเดียวต่อเครื่อง
+
 cd your-project
-ao init --id ai-trading-hub --agents claude-code,antigravity-ide
+ao init --id my-project        # ← คำสั่งเดียว ได้ครบทุกอย่าง
 ```
 
-สร้าง `.ao/` (state + ประวัติ handoff) และ `.agentconfig` ในโปรเจกต์นั้น
+`ao init` ทำให้อัตโนมัติ:
+- `.agentconfig` พร้อม**ทีมมาตรฐาน 4 ตัว + ความถนัด** (claude-code, codex, antigravity-ide,
+  ollama-worker) — แก้เพิ่ม/ลดได้ตามใจ
+- `.mcp.json` — Claude Code / OpenCode เห็น MCP server ทันทีที่เปิดโปรเจกต์
+- `CLAUDE.md` + `AGENTS.md` — กติกาสอน agent ให้เรียก `ao_agents`/`ao_status` ก่อนเริ่มงาน และ
+  `ao_handoff` เมื่อจบงาน (ไม่ต้อง copy เอง)
+- ลงทะเบียนโปรเจกต์ใน registry เครื่อง — คำสั่ง/tool ทุกตัวหลังจากนี้**ไม่ต้องพิมพ์ path อีก**
+- พิมพ์ config สำหรับ Claude Desktop ให้ copy ไปวาง (พร้อม absolute path ที่ถูกต้อง)
 
-### 3) ใช้งานประจำวัน
+## ทีมและความถนัด (ใครทำอะไรได้ / ใคร online)
 
-Agent ที่ต่อ MCP ไว้แล้วจะเรียก `ao_status` / `ao_handoff` เองตาม instruction ที่ตั้งไว้ ส่วนคนก็สั่ง
-CLI เดียวกันได้ตรงๆ:
+```
+$ ao agents
+claude-code        🟢 online   [planning, coding, refactoring, review]  — วางแผนและเขียนโค้ด
+codex              ⚪ offline  [planning, coding]                       — สลับ/เสริมกับ claude-code
+antigravity-ide    🟢 online   [infographic, diagram, documentation]    — ทำภาพ infographic/diagram
+ollama-worker      🟢 online   [summarize, small-tasks, translation]    — โมเดลเล็กทำงานย่อยตามสั่ง
+```
+
+- agent เรียก tool `ao_agents` ตอน connect → รู้ทันทีว่าทีมมีใคร ถนัดอะไร ใครอยู่ — แล้วเลือกส่งงาน
+  ตาม capabilities ได้ถูกตัว
+- `ao_handoff` ปฏิเสธ target ที่ไม่อยู่ในทีม (กันส่งงานหาตัวที่ไม่มีจริง)
+- Presence: agent ที่ระบุตัวเอง (arg `agent`) หรือส่ง handoff จะขึ้น 🟢 online (หน้าต่าง 10 นาที)
+
+## ใช้ LLM local (Ollama / LM Studio / llama.cpp / vLLM) เป็นลูกทีม
+
+Model server พวกนี้ต่อ MCP เองไม่ได้ — `ao worker` เป็นตัวขับให้: รับงานที่ส่งถึงมัน → ยิง API →
+เขียนผลลง `.ao/outputs/` → ส่งไม้กลับให้ผู้ส่งอัตโนมัติ ทุกตัวใช้ OpenAI-compatible API เหมือนกันหมด:
 
 ```bash
-ao status                                     # ดูว่าใครถือไม้อยู่ ทำอะไรค้างไว้
+# Ollama
+ao worker --agent ollama-worker --url http://localhost:11434/v1 --model qwen2.5:3b
+# LM Studio
+ao worker --agent ollama-worker --url http://localhost:1234/v1 --model <ชื่อโมเดลใน LM Studio>
+# llama.cpp (llama-server)
+ao worker --agent ollama-worker --url http://localhost:8080/v1 --model default
+# vLLM
+ao worker --agent ollama-worker --url http://localhost:8000/v1 --model <model>
+```
+
+เปิดทิ้งไว้ได้เลย — จากนั้น agent ตัวไหนก็ตามสั่งงานโมเดลเล็กได้ด้วย
+`ao_handoff(target_agent: "ollama-worker", task: "สรุปไฟล์นี้", artifacts: [...])` แล้วผลลัพธ์จะ
+เด้งกลับมาหาเองพร้อมไฟล์แนบ
+
+## ใช้งานประจำวัน
+
+Agent ที่ต่อ MCP เรียก tool เองตามกติกาใน CLAUDE.md/AGENTS.md ส่วนคนใช้ CLI ชุดเดียวกัน:
+
+```bash
+ao status                        # ใครถือไม้อยู่ ทำอะไรค้าง (+ notes จากผู้ส่ง)
+ao agents                        # ทีม + ความถนัด + ใคร online
 ao handoff --from claude-code --to antigravity-ide \
-  --stage documenting \
-  --task "สร้าง infographic อธิบาย LSTM+DNN architecture" \
-  --artifact src/models/lstm_primary.py
-ao log                                        # ดูประวัติทั้งหมด
-ao log --stage documenting --agent antigravity-ide   # กรองตาม stage/agent
+  --task "เจน diagram อธิบาย pipeline" \
+  --note "โฟกัส LSTM->DNN flow, ใช้สี minimal" \
+  --artifact src/train.py
+ao log --agent ollama-worker     # ประวัติ กรองตาม stage/agent ได้
+ao watch --from claude-code --to antigravity-ide --notify   # auto-handoff เมื่อไฟล์ .md เปลี่ยน + เด้งแจ้งเตือน
+ao projects                      # โปรเจกต์ทั้งหมดที่ลงทะเบียนบนเครื่องนี้
 ```
 
-ทุกคำสั่งจะเขียน debug log (JSON lines) ลง `.ao/logs/ao.log` ของโปรเจกต์นั้นให้อัตโนมัติ — เปิดดูได้เวลา
-ต้องการรู้ว่า handoff ไหนพังเพราะอะไร (`tail -f .ao/logs/ao.log | jq`); ไฟล์ rotate เองเมื่อเกิน 5MB
-
-### 4) เปิด Automated Artifact Sync (ไม่บังคับ)
-
-ให้ `ao` เฝ้าดูไฟล์สเปค/โค้ดเอง แล้วส่งไม้ต่อให้ agent ที่ทำ diagram/docs ทันทีที่มีการแก้ไข โดยไม่ต้องรอ
-agent ต้นทางเรียก `ao_handoff` เอง:
-
-```bash
-ao watch --from claude-code --to antigravity-ide --stage documenting --pattern "*.md"
-# Ctrl+C เพื่อหยุด
-```
-
-## จำลองการทำงานแบบเต็ม (Simulation)
-
-สมมติโปรเจกต์ `ai-trading-hub` (Meta-Labeling EA) กำลังจะเข้าขั้นทำเอกสาร:
-
-```
-$ ao status
-project:      ai-trading-hub
-stage:        coding
-holder_agent: claude-code
-last_task:    เขียน purged walk-forward CV
-```
-
-**Claude Code** ทำงานเสร็จ (เขียนโค้ด `src/validation/purged_cv.py` เสร็จแล้ว) จึงเรียก tool
-`ao_handoff` (ผ่าน MCP โดยอัตโนมัติ ไม่ต้องมีคนสั่ง):
-
-```json
-{
-  "project_dir": "/home/user/Ai-trading-hub",
-  "source_agent": "claude-code",
-  "target_agent": "antigravity-ide",
-  "stage": "documenting",
-  "task": "สร้าง diagram อธิบาย purged walk-forward CV และวิธีกัน data leakage",
-  "artifacts": ["src/validation/purged_cv.py"]
-}
-```
-
-เบื้องหลัง `ao`:
-1. validate payload (มี `task`, stage `documenting` อยู่ในชุดที่ `.agentconfig` กำหนดไว้ไหม)
-2. เขียนไฟล์ `.ao/handoffs/007-claude-code-to-antigravity-ide.json`
-3. อัปเดต `.ao/state.json` → stage เป็น `documenting`, holder เป็น `antigravity-ide`
-4. index ลง `.ao/index.db` สำหรับ query เร็ว
-
-**Antigravity IDE** (ต่อ MCP server เดียวกัน) เปิดงานมาแล้วเรียก `ao_status` เองก่อนเริ่ม เห็นว่า
-ตัวเองถือไม้อยู่ พร้อม `task` และ `artifacts` ที่ Claude Code ทิ้งไว้ให้ครบ — ไม่ต้องให้ผู้ใช้อธิบายซ้ำ
-เลย ทำ diagram เสร็จก็ `ao_handoff` ส่งต่อกลับหรือส่งไปขั้นถัดไปเช่นกัน
-
-```
-$ ao log --limit 3
-[2026-07-16T13:10:00Z] antigravity-ide -> claude-code (coding): แก้ diagram ตามคอมเมนต์
-[2026-07-16T13:05:00Z] claude-code -> antigravity-ide (documenting): สร้าง diagram อธิบาย purged walk-forward CV
-[2026-07-16T12:40:00Z] claude-code -> claude-code (coding): เขียน purged walk-forward CV
-```
-
-ผู้ใช้ไม่ต้องเข้าไปสั่งเองระหว่างขั้นตอนเหล่านี้เลย — เห็นแค่ผลลัพธ์สุดท้ายและเรียก `ao status` /
-`ao log` เพื่อตรวจสอบความคืบหน้าได้ตลอดเวลา
+- ทำงานจากที่ไหนก็ได้: `--project my-project` หรือไม่ระบุเลย (ใช้ default)
+- ทุก handoff เจน **`HANDOFF.md`** ที่ root — agent ที่ไม่มี MCP (หรือคน) เปิดอ่านสถานะล่าสุดได้ทันที
+- Debug: `tail -f .ao/logs/ao.log | jq` (JSON lines, rotate เองที่ 5MB)
 
 ## โครงสร้างโปรเจกต์
 
 ```
-cmd/ao/main.go               # entry point: dispatch "mcp" vs CLI subcommands
+cmd/ao/main.go               # entry point: mcp / worker / CLI dispatch
 internal/
-  model/       envelope.go   # Standard Payload + validation
-  state/       stage.go      # state machine (stage ต่อโปรเจกต์)
-  workspace/   workspace.go  # จัดการ .ao/ (source of truth)
-  store/       store.go, sqlite.go  # SQLite index (rebuildable, filter ตาม stage/agent)
-  orchestrator/orchestrator.go      # business logic กลาง ใช้ร่วมกันทั้ง MCP และ CLI
-  logging/     logging.go    # debug log (.ao/logs/ao.log, JSON lines, rotate 5MB)
-  watcher/     watcher.go    # Automated Artifact Sync (fsnotify) — ใช้โดย `ao watch`
-  mcpserver/   server.go     # MCP tools: ao_init/ao_status/ao_handoff/ao_log
-  cli/         cli.go        # CLI subcommands (init/status/handoff/log/watch)
-docs/
-  SPEC.md              # ข้อกำหนดทางเทคนิคเต็ม + เหตุผลการตัดสินใจ
-  DATA_PIPELINE.md     # Standard Payload schema เต็ม
-  DB_SCHEMA.md         # โครงสร้าง SQLite index
-  ROADMAP.md           # แผนขั้นถัดไป
-  examples/            # ตัวอย่าง payload + วิธีต่อ MCP กับแต่ละ agent
+  model/        envelope.go      # Standard Payload (+notes) + validation
+  state/        stage.go         # state machine (stage ต่อโปรเจกต์)
+  workspace/    workspace.go     # .ao/ (source of truth) + Agent capabilities + .agentconfig
+  store/        store.go, sqlite.go  # SQLite index (rebuildable, filter stage/agent)
+  orchestrator/ orchestrator.go  # business logic กลาง + HANDOFF.md mirror
+  registry/     registry.go      # ~/.config/ao/projects.json — เรียกโปรเจกต์ด้วยชื่อ ไม่ต้องพิมพ์ path
+  presence/     presence.go      # .ao/presence/ — ใคร online
+  scaffold/     scaffold.go      # ao init เจน .mcp.json/CLAUDE.md/AGENTS.md + team preset
+  worker/       worker.go        # ตัวขับ LLM local (OpenAI-compatible)
+  notify/       notify.go        # desktop notification (best-effort)
+  logging/      logging.go       # debug log .ao/logs/ao.log
+  watcher/      watcher.go       # Automated Artifact Sync (fsnotify)
+  mcpserver/    server.go        # MCP tools: ao_init/ao_agents/ao_status/ao_handoff/ao_log/ao_projects
+  cli/          cli.go           # CLI subcommands
+docs/                            # SPEC, DATA_PIPELINE, DB_SCHEMA, ROADMAP, examples
 ```
 
 ## Dev

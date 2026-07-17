@@ -24,12 +24,70 @@ const (
 	agentConfigYML = ".agentconfig"
 )
 
+// Agent is one member of the project's team: who it is and what it's good
+// at, so other agents know what kind of work to hand it.
+type Agent struct {
+	Name         string   `yaml:"name" json:"name"`
+	Description  string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Capabilities []string `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+}
+
+// UnmarshalYAML accepts both the original short form (a plain string, the
+// agent name) and the full object form, so old .agentconfig files keep
+// working unchanged.
+func (a *Agent) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		a.Name = node.Value
+		return nil
+	}
+	type plain Agent // avoid recursing into this method
+	var p plain
+	if err := node.Decode(&p); err != nil {
+		return err
+	}
+	*a = Agent(p)
+	return nil
+}
+
+// AgentsFromNames builds bare Agent profiles (no description/capabilities)
+// from a list of names — used by `ao init --agents a,b,c`.
+func AgentsFromNames(names []string) []Agent {
+	out := make([]Agent, len(names))
+	for i, n := range names {
+		out[i] = Agent{Name: n}
+	}
+	return out
+}
+
 // AgentConfig is the project-level identity file agents read to learn who
 // else is plugged into the workspace and which stages the project defines.
 type AgentConfig struct {
 	ProjectID string   `yaml:"project_id"`
-	Agents    []string `yaml:"agents"`
+	Agents    []Agent  `yaml:"agents"`
 	Stages    []string `yaml:"stages"`
+}
+
+// AgentNames returns just the names of the configured agents.
+func (c AgentConfig) AgentNames() []string {
+	out := make([]string, len(c.Agents))
+	for i, a := range c.Agents {
+		out[i] = a.Name
+	}
+	return out
+}
+
+// HasAgent reports whether name is one of the configured agents. An empty
+// agent list means "no roster configured" and matches anything.
+func (c AgentConfig) HasAgent(name string) bool {
+	if len(c.Agents) == 0 {
+		return true
+	}
+	for _, a := range c.Agents {
+		if a.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // State is the current handoff state of a project: whose turn it is, and
@@ -39,6 +97,7 @@ type State struct {
 	CurrentStage string    `json:"current_stage"`
 	HolderAgent  string    `json:"holder_agent"`
 	LastTask     string    `json:"last_task"`
+	LastNotes    string    `json:"last_notes,omitempty"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
 
@@ -68,16 +127,20 @@ func (w *Workspace) Initialized() bool {
 // Init creates .ao/ (with handoffs/ and an empty state.json) and a starter
 // .agentconfig at the project root. It is safe to call on an already
 // initialized workspace (idempotent, does not overwrite .agentconfig).
-func (w *Workspace) Init(projectID string, agents, stages []string) error {
+func (w *Workspace) Init(projectID string, agents []Agent, stages []string) error {
 	if err := os.MkdirAll(w.aoPath(handoffsDir), 0o755); err != nil {
 		return fmt.Errorf("create .ao/handoffs: %w", err)
 	}
 
 	if _, err := os.Stat(w.aoPath(stateFile)); os.IsNotExist(err) {
+		holder := ""
+		if len(agents) > 0 {
+			holder = agents[0].Name
+		}
 		st := State{
 			ProjectID:    projectID,
 			CurrentStage: firstOr(stages, "planning"),
-			HolderAgent:  firstOr(agents, ""),
+			HolderAgent:  holder,
 			UpdatedAt:    time.Now().UTC(),
 		}
 		if err := w.WriteState(st); err != nil {
@@ -205,6 +268,7 @@ func (w *Workspace) WriteHandoff(env model.Envelope) (string, error) {
 		CurrentStage: env.CurrentStage,
 		HolderAgent:  env.TargetAgent,
 		LastTask:     env.Payload.Task,
+		LastNotes:    env.Payload.Notes,
 		UpdatedAt:    time.Now().UTC(),
 	}
 	if err := w.WriteState(st); err != nil {
@@ -257,6 +321,12 @@ func (w *Workspace) ListHandoffs() ([]HandoffFile, error) {
 type HandoffFile struct {
 	RelPath  string
 	Envelope model.Envelope
+}
+
+// WriteRootFile atomically writes a file at the project root (e.g. the
+// generated HANDOFF.md mirror).
+func (w *Workspace) WriteRootFile(name string, data []byte) error {
+	return atomicWrite(filepath.Join(w.Dir, name), data)
 }
 
 // atomicWrite writes data to path via a temp file + rename so readers never

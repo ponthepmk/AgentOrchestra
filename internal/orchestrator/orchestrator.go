@@ -5,10 +5,12 @@ package orchestrator
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ponthepmk/AgentOrchestra/internal/logging"
 	"github.com/ponthepmk/AgentOrchestra/internal/model"
+	"github.com/ponthepmk/AgentOrchestra/internal/presence"
 	"github.com/ponthepmk/AgentOrchestra/internal/state"
 	"github.com/ponthepmk/AgentOrchestra/internal/store"
 	"github.com/ponthepmk/AgentOrchestra/internal/workspace"
@@ -32,10 +34,10 @@ func (o *Orchestrator) openIndex() (*store.SQLiteStore, error) {
 }
 
 // Init sets up .ao/ and .agentconfig for a new project.
-func (o *Orchestrator) Init(projectID string, agents, stages []string) error {
+func (o *Orchestrator) Init(projectID string, agents []workspace.Agent, stages []string) error {
 	log, closeLog := logging.Open(o.dir)
 	defer closeLog()
-	log.Info("init requested", "project_id", projectID, "agents", agents, "stages", stages)
+	log.Info("init requested", "project_id", projectID, "agents", len(agents), "stages", stages)
 
 	if err := o.ws.Init(projectID, agents, stages); err != nil {
 		log.Error("init failed", "error", err)
@@ -61,6 +63,7 @@ type Status struct {
 	CurrentStage string
 	HolderAgent  string
 	LastTask     string
+	LastNotes    string
 	UpdatedAt    time.Time
 	Stages       []string
 	Agents       []string
@@ -91,10 +94,50 @@ func (o *Orchestrator) Status() (Status, error) {
 		CurrentStage: st.CurrentStage,
 		HolderAgent:  st.HolderAgent,
 		LastTask:     st.LastTask,
+		LastNotes:    st.LastNotes,
 		UpdatedAt:    st.UpdatedAt,
 		Stages:       cfg.Stages,
-		Agents:       cfg.Agents,
+		Agents:       cfg.AgentNames(),
 	}, nil
+}
+
+// AgentInfo is one team member plus their live presence.
+type AgentInfo struct {
+	workspace.Agent
+	Online   bool      `json:"online"`
+	LastSeen time.Time `json:"last_seen,omitzero"`
+}
+
+// Agents returns the project's team roster (from .agentconfig) with each
+// member's capabilities and current presence — this is what a newly
+// connected agent calls to learn who else is on the team and who's around.
+func (o *Orchestrator) Agents() ([]AgentInfo, error) {
+	if !o.ws.Initialized() {
+		return nil, fmt.Errorf("workspace not initialized: run `ao init` in %s first", o.dir)
+	}
+	cfg, err := o.ws.LoadAgentConfig()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AgentInfo, len(cfg.Agents))
+	for i, a := range cfg.Agents {
+		rec := presence.Get(o.dir, a.Name)
+		out[i] = AgentInfo{Agent: a, Online: rec.Online(), LastSeen: rec.LastSeen}
+	}
+	return out, nil
+}
+
+// TouchPresence records that agent was just active (best-effort — never
+// fails the caller). via names the operation that saw the agent.
+func (o *Orchestrator) TouchPresence(agent, via string) {
+	if agent == "" || !o.ws.Initialized() {
+		return
+	}
+	if err := presence.Touch(o.dir, agent, via); err != nil {
+		log, closeLog := logging.Open(o.dir)
+		defer closeLog()
+		log.Error("presence touch failed", "agent", agent, "error", err)
+	}
 }
 
 // HandoffRequest is the input to Handoff; ProjectID/Metadata are filled in
@@ -104,6 +147,7 @@ type HandoffRequest struct {
 	TargetAgent string
 	Stage       string
 	Task        string
+	Notes       string
 	Artifacts   []string
 	Extra       map[string]any
 }
@@ -125,6 +169,12 @@ func (o *Orchestrator) Handoff(req HandoffRequest) (model.Envelope, error) {
 		log.Error("handoff: load agentconfig failed", "error", err)
 		return env, err
 	}
+	if !cfg.HasAgent(req.TargetAgent) {
+		err := fmt.Errorf("target_agent %q is not on this project's team (known agents: %s) — check `ao agents` or add it to .agentconfig",
+			req.TargetAgent, strings.Join(cfg.AgentNames(), ", "))
+		log.Error("handoff rejected", "error", err)
+		return env, err
+	}
 	sm := state.NewMachine(cfg.Stages)
 
 	stage := req.Stage
@@ -144,6 +194,7 @@ func (o *Orchestrator) Handoff(req HandoffRequest) (model.Envelope, error) {
 		TargetAgent:  req.TargetAgent,
 		Payload: model.Payload{
 			Task:      req.Task,
+			Notes:     req.Notes,
 			Artifacts: req.Artifacts,
 			Extra:     req.Extra,
 		},
@@ -177,8 +228,69 @@ func (o *Orchestrator) Handoff(req HandoffRequest) (model.Envelope, error) {
 		log.Error("handoff: index failed", "error", wrapped)
 		return env, wrapped
 	}
+
+	// Best-effort side effects: presence heartbeat for the sender, and the
+	// human/non-MCP-readable HANDOFF.md mirror. Neither may fail the handoff.
+	o.TouchPresence(env.SourceAgent, "handoff")
+	if err := o.writeHandoffMirror(); err != nil {
+		log.Error("handoff: write HANDOFF.md failed", "error", err)
+	}
+
 	log.Info("handoff complete", "project_id", env.ProjectID, "file", relPath, "stage", env.CurrentStage)
 	return env, nil
+}
+
+// MirrorFileName is the generated human-readable snapshot at the project
+// root. It is a one-way mirror: always regenerated, never read back.
+const MirrorFileName = "HANDOFF.md"
+
+// writeHandoffMirror regenerates HANDOFF.md from the current state and the
+// most recent handoffs, so humans and agents without MCP can just read it.
+func (o *Orchestrator) writeHandoffMirror() error {
+	st, err := o.ws.ReadState()
+	if err != nil {
+		return err
+	}
+	files, err := o.ws.ListHandoffs()
+	if err != nil {
+		return err
+	}
+
+	var b strings.Builder
+	b.WriteString("<!-- generated by AgentOrchestra (ao) — do not edit; every handoff overwrites this file -->\n")
+	fmt.Fprintf(&b, "# Handoff — %s\n\n", st.ProjectID)
+	fmt.Fprintf(&b, "- **stage:** %s\n", st.CurrentStage)
+	fmt.Fprintf(&b, "- **ถือไม้อยู่ (your turn):** %s\n", st.HolderAgent)
+	fmt.Fprintf(&b, "- **task:** %s\n", st.LastTask)
+	fmt.Fprintf(&b, "- **updated:** %s\n", st.UpdatedAt.Format(time.RFC3339))
+
+	if len(files) > 0 {
+		last := files[len(files)-1].Envelope
+		if len(last.Payload.Artifacts) > 0 {
+			b.WriteString("- **artifacts:**\n")
+			for _, a := range last.Payload.Artifacts {
+				fmt.Fprintf(&b, "  - `%s`\n", a)
+			}
+		}
+		if last.Payload.Notes != "" {
+			b.WriteString("\n## Notes จากผู้ส่ง\n\n")
+			b.WriteString(last.Payload.Notes)
+			b.WriteString("\n")
+		}
+	}
+
+	b.WriteString("\n## ประวัติล่าสุด\n\n")
+	start := len(files) - 5
+	if start < 0 {
+		start = 0
+	}
+	for i := len(files) - 1; i >= start; i-- {
+		env := files[i].Envelope
+		fmt.Fprintf(&b, "- [%s] %s → %s (%s): %s\n",
+			env.Metadata.Timestamp.Format("2006-01-02 15:04"), env.SourceAgent, env.TargetAgent, env.CurrentStage, env.Payload.Task)
+	}
+
+	return o.ws.WriteRootFile(MirrorFileName, []byte(b.String()))
 }
 
 // LogFilter narrows down Log results; zero values mean "no filter".
