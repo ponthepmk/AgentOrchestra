@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ponthepmk/AgentOrchestra/internal/doctor"
 	"github.com/ponthepmk/AgentOrchestra/internal/logging"
 	"github.com/ponthepmk/AgentOrchestra/internal/orchestrator"
 	"github.com/ponthepmk/AgentOrchestra/internal/registry"
@@ -52,6 +53,14 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		err = runWatch(rest, stdout)
 	case "worker":
 		err = runWorker(rest, stdout)
+	case "doctor":
+		return runDoctor(rest, stdout, stderr)
+	case "memory":
+		err = runMemory(rest, stdout)
+	case "setup":
+		err = runSetup(rest, stdout)
+	case "stats":
+		err = runStats(rest, stdout)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -80,6 +89,10 @@ Usage:
   ao log      [--limit N] [--stage <stage>] [--agent <agent>] [--reindex] [--project <id>] [dir]
   ao watch    --from <agent> --to <agent> [--pattern <glob>]... [--stage <stage>] [--notify] [--project <id>] [dir]
   ao worker   --agent <name> --url <openai-compatible-base-url> --model <model> [--api-key K] [--poll 5s] [--handoff-back] [--project <id>] [dir]
+  ao doctor   [--worker-url <url>] [--project <id>] [dir]      — health check ทั้งระบบ (read-only)
+  ao memory   list|get <key>|set <key> <value>|rm <key> [--agent me] [--tag t] [--project <id>] [dir]
+  ao setup    claude-desktop [--remove]                         — เขียน/ถอด config Claude Desktop ให้ (backup .bak เสมอ)
+  ao stats    [--project <id>] [dir]                            — ตัวเลขกิจกรรม handoff
   ao mcp      — run as an MCP server over stdio (for agents, not humans)
 
 Project selection: pass a [dir], or --project <registered id>, or nothing at
@@ -437,6 +450,209 @@ func runWorker(args []string, stdout io.Writer) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return wk.Run(ctx, log)
+}
+
+// runDoctor prints every health check and exits non-zero when any fails,
+// so it can gate scripts. Read-only by design.
+func runDoctor(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	project := fs.String("project", "", "registered project id")
+	workerURL := fs.String("worker-url", "", "probe this OpenAI-compatible model server too (2s timeout)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	dir, err := resolveDir(*project, fs.Args())
+	if err != nil {
+		fmt.Fprintf(stderr, "ao: %v\n", err)
+		return 1
+	}
+
+	checks := doctor.Run(dir, *workerURL)
+	for _, c := range checks {
+		mark := "✔"
+		if !c.OK {
+			mark = "✖"
+		}
+		fmt.Fprintf(stdout, "%s %-28s %s\n", mark, c.Name, c.Detail)
+		if !c.OK && c.Fix != "" {
+			fmt.Fprintf(stdout, "  → %s\n", c.Fix)
+		}
+	}
+	if !doctor.AllOK(checks) {
+		fmt.Fprintln(stdout, "\nพบปัญหา — แก้ตามคำแนะนำด้านบนแล้วรัน ao doctor ซ้ำ")
+		return 1
+	}
+	fmt.Fprintln(stdout, "\nทุกอย่างพร้อมใช้งาน ✅")
+	return 0
+}
+
+// runMemory implements the human-facing shared-memory commands.
+func runMemory(args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: ao memory list|get <key>|set <key> <value>|rm <key>")
+	}
+	sub, rest := args[0], args[1:]
+
+	fs := flag.NewFlagSet("memory "+sub, flag.ContinueOnError)
+	project := fs.String("project", "", "registered project id")
+	agent := fs.String("agent", "human", "author agent name recorded on set")
+	var tags stringSlice
+	fs.Var(&tags, "tag", "tag for set / filter for list (repeatable)")
+	query := fs.String("query", "", "substring filter for list")
+
+	// Positional args come before flags in this subcommand family:
+	// ao memory set <key> <value> --tag x [dir]
+	var positional []string
+	for len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		positional = append(positional, rest[0])
+		rest = rest[1:]
+	}
+	if err := fs.Parse(rest); err != nil {
+		return err
+	}
+	dirCandidates := fs.Args()
+
+	need := func(n int, usage string) error {
+		if len(positional) < n {
+			return fmt.Errorf("usage: ao memory %s", usage)
+		}
+		return nil
+	}
+
+	switch sub {
+	case "list":
+		dir, err := resolveDir(*project, append(positional, dirCandidates...))
+		if err != nil {
+			return err
+		}
+		entries, err := orchestrator.New(dir).Recall("", "", firstTag(tags), *query)
+		if err != nil {
+			return err
+		}
+		if len(entries) == 0 {
+			fmt.Fprintln(stdout, "no shared memories yet")
+			return nil
+		}
+		for _, e := range entries {
+			fmt.Fprintf(stdout, "%-24s (by %s, %s) %v\n", e.Key, e.AuthorAgent, e.UpdatedAt.Format("2006-01-02 15:04"), e.Tags)
+		}
+		return nil
+	case "get":
+		if err := need(1, "get <key>"); err != nil {
+			return err
+		}
+		dir, err := resolveDir(*project, append(positional[1:], dirCandidates...))
+		if err != nil {
+			return err
+		}
+		entries, err := orchestrator.New(dir).Recall("", positional[0], "", "")
+		if err != nil {
+			return err
+		}
+		e := entries[0]
+		fmt.Fprintf(stdout, "key:     %s\nauthor:  %s\nupdated: %s\ntags:    %v\n\n%s\n", e.Key, e.AuthorAgent, e.UpdatedAt.Format("2006-01-02 15:04"), e.Tags, e.Value)
+		return nil
+	case "set":
+		if err := need(2, "set <key> <value>"); err != nil {
+			return err
+		}
+		dir, err := resolveDir(*project, append(positional[2:], dirCandidates...))
+		if err != nil {
+			return err
+		}
+		entry, err := orchestrator.New(dir).Remember(*agent, positional[0], positional[1], tags)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "remembered %q (author: %s)\n", entry.Key, entry.AuthorAgent)
+		return nil
+	case "rm":
+		if err := need(1, "rm <key>"); err != nil {
+			return err
+		}
+		dir, err := resolveDir(*project, append(positional[1:], dirCandidates...))
+		if err != nil {
+			return err
+		}
+		if err := orchestrator.New(dir).Forget(positional[0]); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "removed %q\n", positional[0])
+		return nil
+	default:
+		return fmt.Errorf("unknown memory command %q — usage: ao memory list|get|set|rm", sub)
+	}
+}
+
+func firstTag(tags stringSlice) string {
+	if len(tags) > 0 {
+		return tags[0]
+	}
+	return ""
+}
+
+// runSetup writes agent-side configuration for tools whose config lives
+// outside the project (currently: Claude Desktop).
+func runSetup(args []string, stdout io.Writer) error {
+	// The target name comes first (`ao setup claude-desktop --remove`), and
+	// Go's flag package stops at the first non-flag token — so peel the
+	// target off before parsing flags.
+	if len(args) == 0 || args[0] != "claude-desktop" {
+		return fmt.Errorf("usage: ao setup claude-desktop [--remove]")
+	}
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
+	remove := fs.Bool("remove", false, "uninstall the agentorchestra entry instead of installing it")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+
+	path, action, err := scaffold.SetupClaudeDesktop(*remove)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "%s: %s\n", action, path)
+	switch action {
+	case "installed", "updated":
+		fmt.Fprintln(stdout, "backup ของเดิมอยู่ที่ "+path+".bak (ถ้ามีไฟล์เดิม) — restart Claude Desktop ทั้งแอปเพื่อให้ config ใหม่ทำงาน")
+	case "removed":
+		fmt.Fprintln(stdout, "ถอด agentorchestra ออกแล้ว (server อื่นไม่ถูกแตะ) — restart Claude Desktop")
+	}
+	return nil
+}
+
+// runStats prints handoff activity numbers.
+func runStats(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("stats", flag.ContinueOnError)
+	project := fs.String("project", "", "registered project id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dir, err := resolveDir(*project, fs.Args())
+	if err != nil {
+		return err
+	}
+
+	stats, err := orchestrator.New(dir).Stats()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "project:        %s\n", stats.ProjectID)
+	fmt.Fprintf(stdout, "total handoffs: %d\n", stats.TotalHandoffs)
+	fmt.Fprintf(stdout, "quick returns:  %d  (ส่งกลับหาผู้ส่งภายใน 30 นาที — ข้อมูลดิบ ไม่ใช่คำตัดสินว่าล้มเหลว)\n\n", stats.QuickReturns)
+	for _, a := range stats.PerAgent {
+		fmt.Fprintf(stdout, "%-18s ส่ง %3d  รับ %3d", a.Agent, a.Sent, a.Received)
+		if a.AvgHoldMinutes > 0 {
+			fmt.Fprintf(stdout, "  ถือไม้เฉลี่ย %.1f นาที", a.AvgHoldMinutes)
+		}
+		fmt.Fprintln(stdout)
+	}
+	if len(stats.PerStage) > 0 {
+		fmt.Fprintln(stdout)
+		for stage, n := range stats.PerStage {
+			fmt.Fprintf(stdout, "stage %-14s %d\n", stage+":", n)
+		}
+	}
+	return nil
 }
 
 // dirArgOrCwd is init's simpler resolution: positional dir or cwd (init

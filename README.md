@@ -94,7 +94,35 @@ ao handoff --from claude-code --to antigravity-ide \
 ao log --agent ollama-worker     # ประวัติ กรองตาม stage/agent ได้
 ao watch --from claude-code --to antigravity-ide --notify   # auto-handoff เมื่อไฟล์ .md เปลี่ยน + เด้งแจ้งเตือน
 ao projects                      # โปรเจกต์ทั้งหมดที่ลงทะเบียนบนเครื่องนี้
+ao stats                         # ตัวเลขกิจกรรม: ใครส่ง/รับเท่าไหร่ ถือไม้นานแค่ไหน
 ```
+
+## เครื่องมือเสริม (แนวคิดจาก Headroom)
+
+```bash
+ao doctor                        # health check ทั้งระบบ — ✔/✖ พร้อมวิธีแก้ทุกข้อ (read-only)
+ao doctor --worker-url http://localhost:11434/v1   # + เช็ค model server ด้วย (timeout 2s)
+
+ao setup claude-desktop          # เขียน config Claude Desktop ให้เลย (backup .bak เสมอ,
+                                 #  merge ไม่แตะ server อื่น, ปฏิเสธถ้าไฟล์เดิม parse ไม่ได้)
+ao setup claude-desktop --remove # ถอดออก — เอาเฉพาะ entry ของเรา
+```
+
+**Shared memory ข้ามทีม** — ฝากความรู้/การตัดสินใจให้เพื่อนร่วมทีมโดย*ไม่ต้องส่งไม้*:
+
+```bash
+ao memory set db-choice "ใช้ SQLite เพราะ home lab" --agent claude-code --tag decision
+ao memory list --tag decision
+ao memory get db-choice          # แสดง author + updated_at เสมอ — ผู้อ่านตัดสินความสดเอง
+ao memory rm db-choice
+```
+
+Agent ใช้ผ่าน MCP tools `ao_remember` / `ao_recall` — เก็บเป็นไฟล์ `.ao/memory/` commit เข้า git ได้
+(มี history ตอนถูกเขียนทับ) จำกัด 16KB/รายการ และ**ห้ามฝาก secret** (ทุก agent ในโปรเจกต์อ่านได้หมด)
+
+> 💡 AgentOrchestra ใช้คู่กับ [Headroom](https://github.com/headroomlabs-ai/headroom) ได้เลย —
+> Headroom ลดค่า token ระหว่าง agent↔LLM ส่วน AO ประสานงานระหว่าง agent↔agent คนละชั้นกัน
+> (`headroom wrap claude` ทำงานร่วมกับ `.mcp.json` ของเราได้ปกติ)
 
 - ทำงานจากที่ไหนก็ได้: `--project my-project` หรือไม่ระบุเลย (ใช้ default)
 - ทุก handoff เจน **`HANDOFF.md`** ที่ root — agent ที่ไม่มี MCP (หรือคน) เปิดอ่านสถานะล่าสุดได้ทันที
@@ -112,7 +140,9 @@ internal/
   orchestrator/ orchestrator.go  # business logic กลาง + HANDOFF.md mirror
   registry/     registry.go      # ~/.config/ao/projects.json — เรียกโปรเจกต์ด้วยชื่อ ไม่ต้องพิมพ์ path
   presence/     presence.go      # .ao/presence/ — ใคร online
-  scaffold/     scaffold.go      # ao init เจน .mcp.json/CLAUDE.md/AGENTS.md + team preset
+  memory/       memory.go        # shared memory ข้ามทีม (.ao/memory/, ao_remember/ao_recall)
+  doctor/       doctor.go        # ao doctor — read-only health checks
+  scaffold/     scaffold.go      # ao init เจน .mcp.json/CLAUDE.md/AGENTS.md + team preset + claude-desktop setup
   worker/       worker.go        # ตัวขับ LLM local (OpenAI-compatible)
   notify/       notify.go        # desktop notification (best-effort)
   logging/      logging.go       # debug log .ao/logs/ao.log

@@ -60,10 +60,35 @@ func TestListTools(t *testing.T) {
 	for _, tool := range res.Tools {
 		names[tool.Name] = true
 	}
-	for _, want := range []string{"ao_init", "ao_status", "ao_handoff", "ao_log", "ao_agents", "ao_projects"} {
+	for _, want := range []string{"ao_init", "ao_status", "ao_handoff", "ao_log", "ao_agents", "ao_projects", "ao_remember", "ao_recall", "ao_stats"} {
 		if !names[want] {
 			t.Errorf("expected tool %q to be registered, got %v", want, names)
 		}
+	}
+}
+
+func TestRememberRecallStatsRoundTrip(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
+	session := connect(t)
+	dir := t.TempDir()
+	callText(t, session, "ao_init", map[string]any{"project_dir": dir, "project_id": "proj"})
+
+	callText(t, session, "ao_remember", map[string]any{
+		"project_dir": dir, "agent": "claude-code",
+		"key": "db-choice", "value": "ใช้ SQLite เพราะ home lab", "tags": []string{"decision"},
+	})
+
+	recallMsg := callText(t, session, "ao_recall", map[string]any{"project_dir": dir, "key": "db-choice"})
+	if !strings.Contains(recallMsg, "SQLite") || !strings.Contains(recallMsg, "claude-code") {
+		t.Fatalf("expected recall to include value and author, got: %s", recallMsg)
+	}
+
+	callText(t, session, "ao_handoff", map[string]any{
+		"project_dir": dir, "source_agent": "claude-code", "target_agent": "antigravity-ide", "task": "t1",
+	})
+	statsMsg := callText(t, session, "ao_stats", map[string]any{"project_dir": dir})
+	if !strings.Contains(statsMsg, "total handoffs: 1") {
+		t.Fatalf("expected stats to count the handoff, got: %s", statsMsg)
 	}
 }
 

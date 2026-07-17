@@ -58,6 +58,21 @@ func New(version string) *mcp.Server {
 		Description: "List all projects registered on this machine (id and directory), and which one is the default when a call names no project.",
 	}, logged("ao_projects", handleProjects))
 
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "ao_remember",
+		Description: "Save a shared team memory (decision, gotcha, fact) that OTHER agents can recall later — unlike ao_handoff this does NOT pass the baton. Same key overwrites. Never store secrets here.",
+	}, logged("ao_remember", handleRemember))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "ao_recall",
+		Description: "Read shared team memories: one entry by key, or list by tag/substring. Check updated_at/author — entries can be stale.",
+	}, logged("ao_recall", handleRecall))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "ao_stats",
+		Description: "Handoff activity numbers for a project: totals, per-agent sent/received and average hold time, per-stage counts, quick returns.",
+	}, logged("ao_stats", handleStats))
+
 	return server
 }
 
@@ -269,6 +284,85 @@ func handleProjects(ctx context.Context, req *mcp.CallToolRequest, args projects
 		msg += fmt.Sprintf("- %s%s -> %s\n", id, marker, dir)
 	}
 	return textResult(msg), f, nil
+}
+
+type rememberArgs struct {
+	projectRef
+	Agent string   `json:"agent" jsonschema:"your agent name (recorded as the author)"`
+	Key   string   `json:"key" jsonschema:"short identifier, letters/digits/dot/dash/underscore, e.g. db-choice"`
+	Value string   `json:"value" jsonschema:"the fact/decision to remember (max 16KB; put large content in a file and remember its path)"`
+	Tags  []string `json:"tags,omitempty" jsonschema:"optional labels for filtering, e.g. [decision, api]"`
+}
+
+func handleRemember(ctx context.Context, req *mcp.CallToolRequest, args rememberArgs) (*mcp.CallToolResult, any, error) {
+	o, err := args.resolve()
+	if err != nil {
+		return errResult(err), nil, nil
+	}
+	entry, err := o.Remember(args.Agent, args.Key, args.Value, args.Tags)
+	if err != nil {
+		return errResult(err), nil, nil
+	}
+	return textResult(fmt.Sprintf("remembered %q (author: %s)", entry.Key, entry.AuthorAgent)), entry, nil
+}
+
+type recallArgs struct {
+	projectRef
+	Agent string `json:"agent,omitempty" jsonschema:"your own agent name — pass it so teammates can see you online"`
+	Key   string `json:"key,omitempty" jsonschema:"exact key to fetch; omit to list"`
+	Tag   string `json:"tag,omitempty" jsonschema:"only list entries with this tag"`
+	Query string `json:"query,omitempty" jsonschema:"only list entries whose key or value contains this text"`
+}
+
+func handleRecall(ctx context.Context, req *mcp.CallToolRequest, args recallArgs) (*mcp.CallToolResult, any, error) {
+	o, err := args.resolve()
+	if err != nil {
+		return errResult(err), nil, nil
+	}
+	entries, err := o.Recall(args.Agent, args.Key, args.Tag, args.Query)
+	if err != nil {
+		return errResult(err), nil, nil
+	}
+	if len(entries) == 0 {
+		return textResult("no shared memories yet"), entries, nil
+	}
+	msg := ""
+	for _, e := range entries {
+		msg += fmt.Sprintf("## %s (by %s, updated %s", e.Key, e.AuthorAgent, e.UpdatedAt.Format("2006-01-02 15:04"))
+		if len(e.Tags) > 0 {
+			msg += fmt.Sprintf(", tags: %v", e.Tags)
+		}
+		msg += ")\n" + e.Value + "\n\n"
+	}
+	return textResult(msg), entries, nil
+}
+
+type statsArgs struct {
+	projectRef
+}
+
+func handleStats(ctx context.Context, req *mcp.CallToolRequest, args statsArgs) (*mcp.CallToolResult, any, error) {
+	o, err := args.resolve()
+	if err != nil {
+		return errResult(err), nil, nil
+	}
+	stats, err := o.Stats()
+	if err != nil {
+		return errResult(err), nil, nil
+	}
+	msg := fmt.Sprintf("project: %s\ntotal handoffs: %d\nquick returns (<30m back to sender): %d\n",
+		stats.ProjectID, stats.TotalHandoffs, stats.QuickReturns)
+	for _, a := range stats.PerAgent {
+		msg += fmt.Sprintf("- %s: sent %d, received %d", a.Agent, a.Sent, a.Received)
+		if a.AvgHoldMinutes > 0 {
+			msg += fmt.Sprintf(", avg hold %.1f min", a.AvgHoldMinutes)
+		}
+		msg += "\n"
+	}
+	for stage, n := range stats.PerStage {
+		msg += fmt.Sprintf("  stage %s: %d\n", stage, n)
+	}
+	return textResult(msg), stats, nil
 }
 
 func textResult(s string) *mcp.CallToolResult {

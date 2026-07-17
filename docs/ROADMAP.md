@@ -45,6 +45,24 @@
 - [x] `ao worker` — ตัวขับ Ollama / LM Studio / llama.cpp / vLLM (OpenAI-compatible):
       รับงาน → เขียนผล `.ao/outputs/` → ส่งไม้กลับอัตโนมัติ + presence heartbeat
 
+## Headroom-Patterns Phase — doctor / memory / setup / stats ✅
+
+(แนวคิดจากการ review `headroomlabs-ai/headroom` — เอา UX patterns มา ไม่เอา compression engine
+เพราะ Headroom ใช้คู่กับ AO ได้ตรงๆ อยู่แล้ว คนละชั้นกัน)
+
+- [x] `ao doctor` — read-only health check ทุกชั้น (PATH, registry, state, team, .mcp.json,
+      CLAUDE.md marker, index-vs-files consistency, presence, memory, worker probe 2s timeout)
+      exit 1 เมื่อมีข้อ fail ใช้ gate script ได้
+- [x] Cross-agent shared memory — `ao_remember`/`ao_recall` (MCP) + `ao memory` (CLI):
+      ฝากความรู้ข้ามทีมโดยไม่ส่งไม้, ไฟล์ `.ao/memory/` commit ได้, 16KB cap, author+updated_at
+      แสดงเสมอ, ห้าม secret
+- [x] `ao setup claude-desktop [--remove]` — เขียน/ถอด config ให้เอง: backup `.bak` เสมอ,
+      merge เฉพาะ key เรา, refuse เมื่อไฟล์เดิม parse ไม่ได้
+- [x] `ao stats` / `ao_stats` — ตัวเลขกิจกรรม (ส่ง/รับต่อ agent, ถือไม้เฉลี่ย, ต่อ stage,
+      quick returns เป็นข้อมูลดิบไม่ตีตรา)
+- [ ] `ao learn` (จาก headroom learn) — mine handoff ที่ล้มเหลวเป็นบทเรียนใน CLAUDE.local.md
+- [ ] worker artifact trimming แบบ head+tail (ตอนนี้ตัดหัวไฟล์อย่างเดียวที่ 32KB)
+
 ## Phase 3 — Home Lab / K3s
 
 - [ ] `PostgresStore` (implement `store.Store` เดิม) สำหรับ deploy บน K3s แชร์ระหว่างหลายเครื่อง

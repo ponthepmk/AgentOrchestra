@@ -49,6 +49,9 @@ Codex ช่วยรีวิว ฯลฯ) ในโปรเจกต์เ�
 | `ao_handoff(project…, source_agent, target_agent, stage, task, notes, artifacts[], extra{})` | validate (รวม target ต้องอยู่ในทีม) แล้วบันทึกการส่งไม้ต่อ + เจน HANDOFF.md |
 | `ao_log(project…, limit, stage, agent)` | ประวัติการส่งไม้ต่อ ล่าสุดก่อน กรองได้ |
 | `ao_projects()` | โปรเจกต์ทั้งหมดที่ลงทะเบียนบนเครื่อง + ตัวไหนเป็น default |
+| `ao_remember(project…, agent, key, value, tags[])` | ฝากความรู้/การตัดสินใจให้ทีม (ไม่ส่งไม้) — upsert ตาม key, จำกัด 16KB, ห้าม secret |
+| `ao_recall(project…, agent, key?, tag?, query?)` | อ่าน shared memory — แสดง author + updated_at เสมอให้ผู้อ่านตัดสินความสด |
+| `ao_stats(project…)` | ตัวเลขกิจกรรม handoff (ส่ง/รับ, ถือไม้เฉลี่ย, ต่อ stage, quick returns) |
 
 `ao_init` เจนกติกาลง `CLAUDE.md`/`AGENTS.md` ให้เอง — agent จะถูกสอนว่า *"เริ่ม session เรียก
 `ao_agents` → `ao_status`, จบงานเรียก `ao_handoff`"* โดยผู้ใช้ไม่ต้อง copy อะไร
@@ -127,7 +130,26 @@ fingerprint ของ handoff ล่าสุด; model server ล่ม = log �
 สถานะปัจจุบัน + notes + artifacts + ประวัติ 5 รายการล่าสุด เพื่อให้ agent ที่ไม่มี MCP และมนุษย์
 อ่านสถานะได้จากไฟล์เดียว watcher จะไม่ trigger จากไฟล์นี้ (กัน loop)
 
-## 12. ดูเพิ่มเติม
+## 12. Shared Memory (`.ao/memory/`)
+
+ช่องทางฝากความรู้ข้ามทีมที่**ไม่ใช่การส่งไม้**: ไฟล์ `.ao/memory/<key>.json`
+(`{key, value, author_agent, tags[], updated_at}`) — commit เข้า git ได้ (ความรู้ติด repo + มี history
+ตอนถูกเขียนทับ) กติกาความปลอดภัย: จำกัด 16KB/รายการ, แสดง author+updated_at ทุกครั้งที่ recall
+(ไม่มี TTL — ผู้อ่านตัดสินความสดเอง), และ**ห้ามฝาก secret** เพราะทุก agent ในโปรเจกต์อ่านได้หมด
+ดู `internal/memory`
+
+## 13. `ao doctor` + `ao setup`
+
+- **doctor** (`internal/doctor`): read-only เสมอ ไม่ auto-fix — รายงาน ✔/✖ พร้อมวิธีแก้ต่อข้อ
+  ครอบคลุม: binary ใน PATH, registry, state/team parse, `.mcp.json`, CLAUDE.md marker,
+  index ตรงกับไฟล์ไหม, presence, memory, และ (opt-in) probe model server ด้วย timeout 2 วินาที
+  exit code 1 เมื่อ fail — ใช้ใน script ได้
+- **setup claude-desktop** (`internal/scaffold/claudedesktop.go`): เขียน config ระดับเครื่องของ
+  Claude Desktop ให้เอง ภายใต้กติกาความปลอดภัย 3 ข้อ: backup `.bak` ก่อนเขียนเสมอ, แตะเฉพาะ
+  `mcpServers.agentorchestra` (server อื่น/key อื่นคงเดิม), และ**ปฏิเสธ**เมื่อไฟล์เดิมไม่ใช่ JSON
+  ที่ parse ได้ (ไม่ฝืนเขียนทับสิ่งที่อ่านไม่ออก) — `--remove` ถอดเฉพาะ entry ของเรา
+
+## 14. ดูเพิ่มเติม
 
 - [`DATA_PIPELINE.md`](./DATA_PIPELINE.md) — Standard Payload / JSON Schema เต็ม
 - [`DB_SCHEMA.md`](./DB_SCHEMA.md) — โครงสร้าง SQLite index

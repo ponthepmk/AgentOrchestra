@@ -58,6 +58,12 @@ erDiagram
 
 Index: `idx_handoffs_project (project_id, created_at)` สำหรับ `ao log` ที่ query ตาม project
 
+## หมายเหตุ: Shared memory ไม่อยู่ใน SQLite
+
+`.ao/memory/*.json` (ao_remember/ao_recall) **ตั้งใจไม่ index ลง SQLite** — จำนวนรายการน้อย
+(หลักสิบ) อ่านตรงจากไฟล์เร็วพอ และการไม่มี index = ไม่มี migration, ไม่มีปัญหา index ไม่ sync
+เพิ่มอีกชั้น ถ้าอนาคตรายการโตจนช้า ค่อยเพิ่มตาราง `memories` แบบ rebuild ได้ตามแนวเดิม
+
 ## เหตุผลที่ไม่ใช้ PostgreSQL ตั้งแต่แรก
 
 `internal/store.Store` เป็น interface — `SQLiteStore` (Phase 1) implement มันแบบเดียวกับที่

@@ -85,6 +85,80 @@ func TestWatchRejectsNonexistentDir(t *testing.T) {
 	}
 }
 
+func TestSetupClaudeDesktopInstallAndRemove(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
+	cfgPath := t.TempDir() + "/claude_desktop_config.json"
+	t.Setenv("AO_CLAUDE_DESKTOP_CONFIG", cfgPath)
+	var out, errBuf bytes.Buffer
+
+	if code := Run([]string{"setup", "claude-desktop"}, &out, &errBuf); code != 0 {
+		t.Fatalf("setup failed (code %d): %s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "installed") {
+		t.Fatalf("expected installed, got: %s", out.String())
+	}
+
+	// Regression: the --remove flag comes AFTER the positional target and
+	// must still be parsed (flag pkg stops at the first non-flag token).
+	out.Reset()
+	if code := Run([]string{"setup", "claude-desktop", "--remove"}, &out, &errBuf); code != 0 {
+		t.Fatalf("setup --remove failed (code %d): %s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "removed") {
+		t.Fatalf("expected removed, got: %s", out.String())
+	}
+
+	out.Reset()
+	if code := Run([]string{"setup", "claude-desktop", "--remove"}, &out, &errBuf); code != 0 {
+		t.Fatalf("second remove should be a clean no-op, got code %d: %s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "not installed") {
+		t.Fatalf("expected not installed, got: %s", out.String())
+	}
+}
+
+func TestMemoryAndStatsCommands(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
+	dir := t.TempDir()
+	var out, errBuf bytes.Buffer
+	Run([]string{"init", "--id", "proj", "--agents", "a,b", dir}, &out, &errBuf)
+
+	out.Reset()
+	if code := Run([]string{"memory", "set", "k1", "ค่าที่จำไว้", "--agent", "a", "--tag", "decision", dir}, &out, &errBuf); code != 0 {
+		t.Fatalf("memory set failed (code %d): %s", code, errBuf.String())
+	}
+	out.Reset()
+	if code := Run([]string{"memory", "get", "k1", dir}, &out, &errBuf); code != 0 {
+		t.Fatalf("memory get failed (code %d): %s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "ค่าที่จำไว้") || !strings.Contains(out.String(), "author:  a") {
+		t.Fatalf("unexpected memory get output: %s", out.String())
+	}
+
+	Run([]string{"handoff", "--from", "a", "--to", "b", "--task", "t", dir}, &out, &errBuf)
+	out.Reset()
+	if code := Run([]string{"stats", dir}, &out, &errBuf); code != 0 {
+		t.Fatalf("stats failed (code %d): %s", code, errBuf.String())
+	}
+	if !strings.Contains(out.String(), "total handoffs: 1") {
+		t.Fatalf("unexpected stats output: %s", out.String())
+	}
+}
+
+func TestDoctorExitCodes(t *testing.T) {
+	t.Setenv("AO_CONFIG_DIR", t.TempDir())
+	dir := t.TempDir()
+	var out, errBuf bytes.Buffer
+
+	// Uninitialized dir → doctor fails.
+	if code := Run([]string{"doctor", dir}, &out, &errBuf); code == 0 {
+		t.Fatalf("expected doctor to fail on uninitialized dir, output: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "workspace") {
+		t.Fatalf("expected workspace check in output: %s", out.String())
+	}
+}
+
 func TestUnknownCommand(t *testing.T) {
 	t.Setenv("AO_CONFIG_DIR", t.TempDir())
 	var out, errBuf bytes.Buffer
