@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"github.com/ponthepmk/AgentOrchestra/internal/registry"
 	"github.com/ponthepmk/AgentOrchestra/internal/scaffold"
 	"github.com/ponthepmk/AgentOrchestra/internal/state"
+	"github.com/ponthepmk/AgentOrchestra/internal/ui"
 	"github.com/ponthepmk/AgentOrchestra/internal/watcher"
 	"github.com/ponthepmk/AgentOrchestra/internal/worker"
 	"github.com/ponthepmk/AgentOrchestra/internal/workspace"
@@ -30,8 +32,13 @@ import (
 // exit code.
 func Run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		printUsage(stderr)
-		return 2
+		// Bare `ao` is the friendly front door: a one-screen summary of the
+		// current project plus what to do next — not a wall of usage text.
+		if err := runSummary(stdout); err != nil {
+			fmt.Fprintf(stderr, "ao: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	sub, rest := args[0], args[1:]
@@ -61,6 +68,8 @@ func Run(args []string, stdout, stderr io.Writer) int {
 		err = runSetup(rest, stdout)
 	case "stats":
 		err = runStats(rest, stdout)
+	case "ui":
+		err = runUI(rest, stdout)
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return 0
@@ -80,6 +89,10 @@ func Run(args []string, stdout, stderr io.Writer) int {
 func printUsage(w io.Writer) {
 	fmt.Fprint(w, `AgentOrchestra (ao) — Multi-Agent context handoff
 
+เริ่มง่ายสุด:
+  ao          — หน้าสรุปสถานะ + บอกว่าควรทำอะไรต่อ
+  ao ui       — เปิด dashboard ในเบราว์เซอร์ (เห็นทุกอย่างหน้าเดียว)
+
 Usage:
   ao init     --id <project_id> [--preset team] [--agents a,b,c] [--stages s1,s2,s3] [dir]
   ao status   [--project <id>] [dir]
@@ -93,6 +106,7 @@ Usage:
   ao memory   list|get <key>|set <key> <value>|rm <key> [--agent me] [--tag t] [--project <id>] [dir]
   ao setup    claude-desktop [--remove]                         — เขียน/ถอด config Claude Desktop ให้ (backup .bak เสมอ)
   ao stats    [--project <id>] [dir]                            — ตัวเลขกิจกรรม handoff
+  ao ui       [--port 8700] [--project <id>] [dir]              — dashboard ในเบราว์เซอร์
   ao mcp      — run as an MCP server over stdio (for agents, not humans)
 
 Project selection: pass a [dir], or --project <registered id>, or nothing at
@@ -651,6 +665,119 @@ func runStats(args []string, stdout io.Writer) error {
 		for stage, n := range stats.PerStage {
 			fmt.Fprintf(stdout, "stage %-14s %d\n", stage+":", n)
 		}
+	}
+	return nil
+}
+
+// runSummary is what bare `ao` shows: one screen with the project's state,
+// who's online, recent handoffs, and a concrete suggestion for what to do
+// next — so nobody needs to memorize subcommands to get oriented.
+func runSummary(stdout io.Writer) error {
+	dir, err := resolveDir("", nil)
+	if err != nil {
+		dir = "."
+	}
+
+	o := orchestrator.New(dir)
+	st, err := o.Status()
+	if err != nil {
+		fmt.Fprintln(stdout, "ยังไม่มีโปรเจกต์ AgentOrchestra ที่พร้อมใช้")
+		fmt.Fprintln(stdout, "")
+		fmt.Fprintln(stdout, "เริ่มต้น: cd เข้าโปรเจกต์ของคุณ แล้วรัน")
+		fmt.Fprintln(stdout, "  ao init --id <ชื่อโปรเจกต์>")
+		fmt.Fprintln(stdout, "")
+		fmt.Fprintln(stdout, "คำสั่งเดียวได้ครบ: ทีม agent + config Claude Code/Desktop + กติกาให้ agent เรียกใช้เอง")
+		fmt.Fprintln(stdout, "(ดูคำสั่งทั้งหมด: ao help)")
+		return nil
+	}
+
+	fmt.Fprintf(stdout, "🎼 %s — stage: %s\n\n", st.ProjectID, st.CurrentStage)
+	fmt.Fprintf(stdout, "ถึงตาของ:  %s\n", st.HolderAgent)
+	if st.LastTask != "" {
+		fmt.Fprintf(stdout, "งานค้าง:   %s\n", st.LastTask)
+	}
+	if st.LastNotes != "" {
+		fmt.Fprintf(stdout, "notes:     %s\n", firstLine(st.LastNotes))
+	}
+
+	if infos, err := o.Agents(); err == nil && len(infos) > 0 {
+		var online []string
+		for _, a := range infos {
+			if a.Online {
+				online = append(online, a.Name)
+			}
+		}
+		if len(online) > 0 {
+			fmt.Fprintf(stdout, "online:    %s\n", strings.Join(online, ", "))
+		} else {
+			fmt.Fprintln(stdout, "online:    (ยังไม่มีใคร online)")
+		}
+	}
+
+	if records, err := o.Log(orchestrator.LogFilter{Limit: 3}); err == nil && len(records) > 0 {
+		fmt.Fprintln(stdout, "\nล่าสุด:")
+		for _, r := range records {
+			fmt.Fprintf(stdout, "  [%s] %s → %s: %s\n", r.CreatedAt.Format("01-02 15:04"), r.SourceAgent, r.TargetAgent, r.Task)
+		}
+	}
+
+	fmt.Fprintln(stdout, "\nทำต่อ:")
+	holderOnline := false
+	if infos, err := o.Agents(); err == nil {
+		for _, a := range infos {
+			if a.Name == st.HolderAgent && a.Online {
+				holderOnline = true
+			}
+		}
+	}
+	switch {
+	case st.LastTask == "":
+		fmt.Fprintf(stdout, "  • ยังไม่มีงานในระบบ — สั่งงานแรก: ao handoff --from <คุณ/agent> --to <agent> --task \"...\"\n")
+	case holderOnline:
+		fmt.Fprintf(stdout, "  • %s online อยู่และมีงานในมือ — รอผลได้เลย หรือดูสดที่ ao ui\n", st.HolderAgent)
+	default:
+		fmt.Fprintf(stdout, "  • งานค้างอยู่ที่ %s ซึ่งยังไม่ online — เปิดแอปของ agent นั้นเพื่อทำงานต่อ\n", st.HolderAgent)
+	}
+	fmt.Fprintln(stdout, "  • เห็นทุกอย่างหน้าเดียว: ao ui  |  เช็คสุขภาพระบบ: ao doctor  |  คำสั่งทั้งหมด: ao help")
+	return nil
+}
+
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i] + " …"
+	}
+	return s
+}
+
+// runUI serves the local dashboard until interrupted.
+func runUI(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
+	project := fs.String("project", "", "registered project id")
+	port := fs.Int("port", 8700, "port to serve the dashboard on")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	dir, err := resolveDir(*project, fs.Args())
+	if err != nil {
+		return err
+	}
+	if !workspace.Open(dir).Initialized() {
+		return fmt.Errorf("workspace %s is not initialized — run `ao init --id <project>` first", dir)
+	}
+
+	addr := fmt.Sprintf("127.0.0.1:%d", *port)
+	server := &http.Server{Addr: addr, Handler: ui.NewHandler(dir)}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		server.Close()
+	}()
+
+	fmt.Fprintf(stdout, "dashboard พร้อมแล้ว → เปิดเบราว์เซอร์ที่ http://%s (Ctrl+C เพื่อหยุด)\n", addr)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		return err
 	}
 	return nil
 }

@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentOrchestra</title>
+<style>
+  :root {
+    --surface: #fcfcfb;
+    --card: #ffffff;
+    --border: #e4e4e0;
+    --ink: #1f1f1e;
+    --ink-2: #55554f;
+    --ink-3: #8a8a82;
+    --good: #0ca30c;
+    --good-text: #006300;
+    --critical: #d03b3b;
+    --accent: #2f6fed;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #1a1a19;
+      --card: #232322;
+      --border: #373734;
+      --ink: #f0f0ec;
+      --ink-2: #b5b5ad;
+      --ink-3: #83837b;
+      --good: #0ca30c;
+      --good-text: #4fce4f;
+      --critical: #e06666;
+      --accent: #7aa2ff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--surface);
+    color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 18px 24px 6px;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  header .sub { color: var(--ink-3); font-size: 13px; }
+  main {
+    display: grid; gap: 16px; padding: 12px 24px 32px;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    max-width: 1200px;
+  }
+  section {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+  section h2 {
+    margin: 0 0 10px; font-size: 12px; font-weight: 650;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .wide { grid-column: 1 / -1; }
+  .hero { font-size: 26px; font-weight: 700; margin: 2px 0 2px; overflow-wrap: anywhere; }
+  .hero-label { color: var(--ink-3); font-size: 12px; }
+  .kv { margin: 6px 0 0; }
+  .kv div { display: flex; gap: 8px; margin: 3px 0; }
+  .kv dt { color: var(--ink-2); min-width: 64px; }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .notes {
+    margin-top: 10px; padding: 10px 12px; border-left: 3px solid var(--accent);
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    border-radius: 0 6px 6px 0; white-space: pre-wrap; font-size: 14px;
+  }
+  ul.team { list-style: none; margin: 0; padding: 0; }
+  ul.team li { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; border-top: 1px solid var(--border); }
+  ul.team li:first-child { border-top: 0; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin-top: 7px; background: var(--ink-3); }
+  .dot.on { background: var(--good); }
+  .agent-name { font-weight: 600; min-width: 130px; }
+  .presence { font-size: 12.5px; min-width: 64px; }
+  .presence.on { color: var(--good-text); font-weight: 600; }
+  .presence.off { color: var(--ink-3); }
+  .caps { color: var(--ink-2); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; color: var(--ink-3); font-weight: 600; font-size: 12px; padding: 4px 10px 6px 0; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 10px 6px 0; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
+  tr:last-child td { border-bottom: 0; }
+  td.t { color: var(--ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .tiles { display: flex; gap: 20px; flex-wrap: wrap; }
+  .tile .num { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tile .lbl { font-size: 12px; color: var(--ink-3); }
+  .muted { color: var(--ink-3); }
+  .err {
+    grid-column: 1 / -1; padding: 14px 16px; border-radius: 10px;
+    border: 1px solid var(--critical); color: var(--critical); font-weight: 500;
+  }
+  .mem-key { font-weight: 600; }
+  .mem-meta { color: var(--ink-3); font-size: 12px; }
+  .mem-val { white-space: pre-wrap; }
+  #updated { color: var(--ink-3); font-size: 12px; margin-left: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎼 AgentOrchestra</h1>
+  <span class="sub" id="project"></span>
+  <span id="updated"></span>
+</header>
+<main id="main"><section class="wide muted">กำลังโหลด…</section></main>
+
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function refresh() {
+  let d;
+  try {
+    d = await (await fetch("/api/summary")).json();
+  } catch (e) {
+    document.getElementById("main").innerHTML =
+      `<div class="err">ต่อ ao ui ไม่ได้ — process อาจถูกปิดไปแล้ว (${esc(e.message)})</div>`;
+    return;
+  }
+  document.getElementById("updated").textContent =
+    "อัปเดต " + new Date().toLocaleTimeString("th-TH");
+
+  if (d.error) {
+    document.getElementById("main").innerHTML = `<div class="err">${esc(d.error)}</div>`;
+    return;
+  }
+  document.getElementById("project").textContent = d.status.ProjectID;
+
+  const holderOnline = (d.agents || []).some(a => a.name === d.status.HolderAgent && a.online);
+  let html = `
+  <section>
+    <h2>ตอนนี้ถึงตาใคร</h2>
+    <div class="hero">${esc(d.status.HolderAgent) || "—"}</div>
+    <div class="hero-label">${holderOnline ? "🟢 online อยู่ตอนนี้" : "ยังไม่ online — เปิดแอปของ agent นี้เพื่อทำงานต่อ"}</div>
+    <dl class="kv">
+      <div><dt>stage</dt><dd>${esc(d.status.CurrentStage)}</dd></div>
+      <div><dt>งาน</dt><dd>${esc(d.status.LastTask) || "<span class='muted'>ยังไม่มีงานค้าง</span>"}</dd></div>
+      <div><dt>อัปเดต</dt><dd>${esc((d.status.UpdatedAt || "").replace("T", " ").slice(0, 16))}</dd></div>
+    </dl>
+    ${d.status.LastNotes ? `<div class="notes">${esc(d.status.LastNotes)}</div>` : ""}
+  </section>
+
+  <section>
+    <h2>ทีม (${(d.agents || []).length})</h2>
+    <ul class="team">
+      ${(d.agents || []).map(a => `
+        <li>
+          <span class="dot ${a.online ? "on" : ""}"></span>
+          <span class="agent-name">${esc(a.name)}</span>
+          <span class="presence ${a.online ? "on" : "off"}">${a.online ? "online" : "offline"}</span>
+          <span class="caps">${esc((a.capabilities || []).join(", "))}</span>
+        </li>`).join("") || "<li class='muted'>ยังไม่มี agent ใน .agentconfig</li>"}
+    </ul>
+  </section>`;
+
+  if (d.stats) {
+    html += `
+  <section>
+    <h2>ตัวเลขกิจกรรม</h2>
+    <div class="tiles">
+      <div class="tile"><div class="num">${d.stats.total_handoffs}</div><div class="lbl">handoff ทั้งหมด</div></div>
+      <div class="tile"><div class="num">${d.stats.quick_returns}</div><div class="lbl">ส่งกลับภายใน 30 นาที</div></div>
+      <div class="tile"><div class="num">${(d.memories || []).length}</div><div class="lbl">shared memory</div></div>
+    </div>
+  </section>`;
+  }
+
+  html += `
+  <section class="wide">
+    <h2>Handoff ล่าสุด</h2>
+    ${(d.handoffs || []).length ? `
+    <table>
+      <thead><tr><th>เวลา</th><th>จาก → ถึง</th><th>stage</th><th>งาน</th></tr></thead>
+      <tbody>
+        ${d.handoffs.map(h => `
+          <tr>
+            <td class="t">${esc(h.at)}</td>
+            <td>${esc(h.source)} → <strong>${esc(h.target)}</strong></td>
+            <td>${esc(h.stage)}</td>
+            <td>${esc(h.task)}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>` : "<div class='muted'>ยังไม่มีการส่งไม้ — เริ่มด้วย ao handoff หรือให้ agent เรียก ao_handoff</div>"}
+  </section>
+
+  <section class="wide">
+    <h2>Shared memory (${(d.memories || []).length})</h2>
+    ${(d.memories || []).length ? `
+    <table>
+      <thead><tr><th>key</th><th>ค่า</th><th>ผู้เขียน / เวลา</th></tr></thead>
+      <tbody>
+        ${d.memories.map(m => `
+          <tr>
+            <td class="mem-key">${esc(m.key)}${(m.tags || []).length ? `<div class="mem-meta">${esc(m.tags.join(", "))}</div>` : ""}</td>
+            <td class="mem-val">${esc(m.value)}</td>
+            <td class="mem-meta">${esc(m.author_agent)}<br>${esc((m.updated_at || "").replace("T", " ").slice(0, 16))}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>` : "<div class='muted'>ยังไม่มีความรู้ที่ทีมฝากไว้ — ใช้ ao memory set หรือให้ agent เรียก ao_remember</div>"}
+  </section>`;
+
+  document.getElementById("main").innerHTML = html;
+}
+
+refresh();
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>
